@@ -73,7 +73,7 @@ var center_sub: Label
 var hint_l: Label
 var pulse_l: Label
 var beacon_l: Label
-var beacon_mark: Label
+var beacon_marks: Array[Label] = []
 var cross: Crosshair
 var vig_speed: ColorRect
 var vig_danger: ColorRect
@@ -233,11 +233,6 @@ func _build_game() -> void:
 	beacon_l.visible = false
 	game_root.add_child(beacon_l)
 
-	beacon_mark = _label("", 16, f_display)
-	beacon_mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	beacon_mark.size = Vector2(120, 44)
-	beacon_mark.visible = false
-	game_root.add_child(beacon_mark)
 
 	var role := _box(false, 10)
 	_place(role, 0, 0, 0, 0, 16, 16, 600, 50)
@@ -511,7 +506,7 @@ func _fill_help() -> void:
 		["Rebords", "En l'air face à un rebord : %s pour s'agripper et se hisser." % jump],
 		[Keys.name_of("tag"), "Chasseur : toucher un chassé dans le viseur, de près."],
 		[Keys.name_of("pulse"), "Chasseur : sonar, révèle les chassés à travers les murs."],
-		["Balises", "Chassé : rejoins chaque balise (colonne de lumière) avant la fin du compte à rebours (+50). Sinon, le chasseur te voit à travers les murs 6 s."],
+		["Balises", "Chassé : rejoins au moins une des balises (colonnes de lumière) avant la fin du compte à rebours, +50 par balise. Sinon, le chasseur te voit à travers les murs 6 s."],
 		[Keys.name_of("start_round"), "Lancer la manche (2 joueurs minimum)."],
 		["%s · Échap" % Keys.name_of("scores"), "Scores · menu"],
 		[Keys.name_of("fullscreen"), "Plein écran"],
@@ -768,14 +763,27 @@ func set_beacon(text: String, color: Color) -> void:
 	beacon_l.add_theme_color_override("font_color", color)
 
 
-## Marker that follows the beacon on screen (pos is in viewport pixels).
-func set_beacon_marker(on: bool, pos := Vector2.ZERO, text := "", color := INK) -> void:
-	beacon_mark.visible = on
+## Marker i follows beacon i on screen (pos is in viewport pixels).
+func set_beacon_marker(i: int, on: bool, pos := Vector2.ZERO, text := "", color := INK) -> void:
+	while beacon_marks.size() <= i:
+		var m := _label("", 16, f_display)
+		m.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		m.size = Vector2(120, 44)
+		m.visible = false
+		game_root.add_child(m)
+		beacon_marks.append(m)
+	var mark := beacon_marks[i]
+	mark.visible = on
 	if not on:
 		return
-	beacon_mark.text = "◆\n" + text
-	beacon_mark.add_theme_color_override("font_color", color)
-	beacon_mark.position = pos - beacon_mark.size / 2.0
+	mark.text = "◆\n" + text
+	mark.add_theme_color_override("font_color", color)
+	mark.position = pos - mark.size / 2.0
+
+
+func hide_beacon_markers() -> void:
+	for m in beacon_marks:
+		m.visible = false
 
 
 func set_cross(mode: String) -> void:

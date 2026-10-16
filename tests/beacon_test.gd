@@ -32,36 +32,53 @@ func _run() -> void:
 	g.ph = "run"
 	g.t = net.ROUND_T
 	var me: int = net.me()
-	net.local_pos = Vector3(500, 0, 500)   # far from every spot
+	var far := Vector3(500, 0, 500)   # away from every spot
+	net.local_pos = far
 
 	_tick(net.BEACON_FIRST - 1.0)
 	_check("pas de balise avant %d s de chasse" % int(net.BEACON_FIRST), g.b.is_empty())
 	_tick(1.5)
-	_check("une balise apparaît ensuite", not g.b.is_empty() and spots.has(g.b.p))
-	if g.b.is_empty():
+	var ps: Array = g.b.get("p", [])
+	_check("%d balises apparaissent ensemble" % ps.size(), ps.size() == net.BEACON_COUNT and ps.all(func(p): return spots.has(p)))
+	if ps.size() != net.BEACON_COUNT:
 		return _done()
+	_check("espacées d'au moins %d m (min %.0f m)" % [int(net.BEACON_SPREAD), _min_gap(ps, ps)], _min_gap(ps, ps) >= net.BEACON_SPREAD)
 
-	var first: Vector3 = g.b.p
+	var first: Array = ps.duplicate()
 	var score_before := float(g.sc.get(me, 0.0))
-	net.local_pos = first + Vector3(1.5, 0, 0)
+	net.local_pos = ps[1] + Vector3(1.5, 0, 0)
 	_tick(0.2)
 	var gained := float(g.sc.get(me, 0.0)) - score_before
-	_check("atteindre la balise : validée et +%d (gagné %.0f)" % [int(net.BEACON_PTS), gained],
-		(g.b.ok as Array).has(me) and gained >= net.BEACON_PTS)
-	net.local_pos = Vector3(500, 0, 500)
-	_tick(net.BEACON_T)
-	_check("balise validée : pas repéré à la fermeture", g.b.is_empty() and (g.rv as Array).is_empty())
+	_check("atteindre une balise : validée et +%d (gagné %.0f)" % [int(net.BEACON_PTS), gained],
+		(g.b.ok[1] as Array).has(me) and not (g.b.ok[0] as Array).has(me) and gained >= net.BEACON_PTS)
+	net.local_pos = ps[2] + Vector3(0, 0, 1.0)
+	_tick(0.2)
+	_check("une deuxième balise rapporte encore +%d" % int(net.BEACON_PTS), float(g.sc.get(me, 0.0)) - score_before >= 2.0 * net.BEACON_PTS)
+	net.local_pos = far
+	_tick_until(func() -> bool: return g.b.is_empty(), net.BEACON_T + 1.0)
+	_check("une balise suffit : pas repéré à la fermeture", (g.rv as Array).is_empty())
 
 	_tick(net.BEACON_GAP + 0.5)
-	_check("nouvelle balise à %.0f m de la précédente" % (g.b.p.distance_to(first) if not g.b.is_empty() else 0.0),
-		not g.b.is_empty() and g.b.p.distance_to(first) >= net.BEACON_MIN_MOVE)
+	var second: Array = g.b.get("p", [])
+	_check("nouvelle vague à %.0f m au moins de la précédente" % _min_gap(second, first),
+		second.size() == net.BEACON_COUNT and _min_gap(second, first) >= net.BEACON_MIN_MOVE)
 	_tick_until(func() -> bool: return g.b.is_empty(), net.BEACON_T + 1.0)
-	_check("balise ratée : repéré %.1f s" % float(g.rvt), (g.rv as Array) == [me] and float(g.rvt) > net.REVEAL_T - 0.5)
+	_check("aucune balise atteinte : repéré %.1f s" % float(g.rvt), (g.rv as Array) == [me] and float(g.rvt) > net.REVEAL_T - 0.5)
 	_tick(net.REVEAL_T + 0.5)
 	_check("le repérage s'arrête ensuite", (g.rv as Array).is_empty())
 
 	world.free()
 	_done()
+
+
+## Smallest distance between a point of a and a different point of b.
+func _min_gap(a: Array, b: Array) -> float:
+	var m := INF
+	for p: Vector3 in a:
+		for q: Vector3 in b:
+			if p != q:
+				m = minf(m, p.distance_to(q))
+	return m
 
 
 func _tick(seconds: float) -> void:

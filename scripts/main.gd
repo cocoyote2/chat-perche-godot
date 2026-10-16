@@ -26,9 +26,9 @@ var hud_acc := 0.0
 var last_phase := ""
 var last_count := -1
 var heart_t := 0.0
-var beacon: Beacon
-var last_beacon_p = null   # Vector3 of the beacon already announced, or null
-var beacon_done := false
+var beacons: Array[Beacon] = []
+var last_wave := ""        # positions of the wave already announced
+var my_reached := 0        # beacons of this wave I have reached
 var reveal_seen := false
 var board_held := false
 var settings := ConfigFile.new()
@@ -45,8 +45,10 @@ func _ready() -> void:
 	world.build_collision()
 	world.build_visuals()
 	Net.beacon_spots = world.beacon_spots
-	beacon = Beacon.new()
-	world.add_child(beacon)
+	for i in Net.BEACON_COUNT:
+		var bc := Beacon.new()
+		world.add_child(bc)
+		beacons.append(bc)
 	_setup_environment()
 
 	sfx = Sfx.new()
@@ -221,10 +223,11 @@ func _exit_game() -> void:
 		avatars[id].queue_free()
 	avatars.clear()
 	sfx.play("slide_off")
-	beacon.visible = false
+	for bc in beacons:
+		bc.visible = false
 	hud.set_beacon("", Hud.INK)
-	hud.set_beacon_marker(false)
-	last_beacon_p = null
+	hud.hide_beacon_markers()
+	last_wave = ""
 
 
 func _set_fullscreen(on: bool) -> void:
@@ -496,27 +499,31 @@ func _process(delta: float) -> void:
 		]))
 
 
-## Beacon in the world, its HUD line and marker, and the messages when one
-## appears, is reached, or closes on runners who missed it.
+## Beacons in the world, the HUD line and markers, and the messages when a wave
+## appears, a beacon is reached, or the wave closes on runners who missed it.
 func _update_beacon(g: Dictionary, role: String) -> void:
 	var me := Net.me()
 	var b: Dictionary = g.b
 	var active: bool = not b.is_empty() and g.ph == "run" and role != "free"
+	var ps: Array = b.get("p", []) if active else []
+	var oks: Array = b.get("ok", []) if active else []
+	var wave := str(ps)
 	if not active:
-		last_beacon_p = null
-	else:
-		var bp: Vector3 = b.p
-		if last_beacon_p == null or (last_beacon_p as Vector3) != bp:
-			last_beacon_p = bp
-			beacon_done = false
-			sfx.play("beacon")
-			if role == "runner":
-				hud.message("Nouvelle balise : rejoins-la en %d s" % ceili(float(b.t)))
-			elif role == "hunter":
-				hud.message("Nouvelle balise : les chassés doivent s'y rendre")
-	var done: bool = active and (b.ok as Array).has(me)
-	if done and not beacon_done:
-		beacon_done = true
+		last_wave = ""
+	elif wave != last_wave:
+		last_wave = wave
+		my_reached = 0
+		sfx.play("beacon")
+		if role == "runner":
+			hud.message("Nouvelles balises : rejoins-en une en %d s" % ceili(float(b.t)))
+		elif role == "hunter":
+			hud.message("Nouvelles balises : les chassés doivent en rejoindre une")
+	var reached := 0
+	for ids in oks:
+		if (ids as Array).has(me):
+			reached += 1
+	if reached > my_reached:
+		my_reached = reached
 		sfx.play("beacon_ok")
 		hud.flash_move("Balise +%d" % roundi(Net.BEACON_PTS))
 
@@ -526,7 +533,7 @@ func _update_beacon(g: Dictionary, role: String) -> void:
 		reveal_seen = true
 		if rv.has(me) and role == "runner":
 			sfx.play("reveal")
-			hud.message("Balise ratée : le chasseur te voit à travers les murs")
+			hud.message("Aucune balise atteinte : le chasseur te voit à travers les murs")
 			hud.flash_screen(0.25)
 		elif role == "hunter":
 			sfx.play("reveal")
@@ -534,24 +541,30 @@ func _update_beacon(g: Dictionary, role: String) -> void:
 	elif not reveal_on:
 		reveal_seen = false
 
-	if active:
-		var bp: Vector3 = b.p
-		beacon.show_at(bp, done)
-		var col := Beacon.DONE if done else Beacon.TODO
-		var secs := ceili(float(b.t))
-		var dist := roundi(player.position.distance_to(bp))
-		if role == "runner":
-			hud.set_beacon("Balise validée" if done else "Balise · %d s · %d m" % [secs, dist], col)
-		else:
-			hud.set_beacon("Balise · %d s" % secs, col)
+	var nearest := INF
+	for i in beacons.size():
+		if i >= ps.size():
+			beacons[i].visible = false
+			hud.set_beacon_marker(i, false)
+			continue
+		var bp: Vector3 = ps[i]
+		var done: bool = (oks[i] as Array).has(me)
+		beacons[i].show_at(bp, done)
+		var dist := player.position.distance_to(bp)
 		if done:
-			hud.set_beacon_marker(false)
+			hud.set_beacon_marker(i, false)
 		else:
-			hud.set_beacon_marker(true, _screen_point(bp + Vector3(0, 1.5, 0)), "%d m" % dist, col)
-		return
-	beacon.visible = false
-	hud.set_beacon_marker(false)
-	if reveal_on and rv.has(me) and role == "runner":
+			nearest = minf(nearest, dist)
+			hud.set_beacon_marker(i, true, _screen_point(bp + Vector3(0, 1.5, 0)), "%d m" % roundi(dist), Beacon.TODO)
+	if active:
+		var secs := ceili(float(b.t))
+		if role == "runner" and reached > 0:
+			hud.set_beacon("Balise validée · %d s" % secs, Beacon.DONE)
+		elif role == "runner":
+			hud.set_beacon("Balises · %d s · la plus proche à %d m" % [secs, roundi(nearest)], Beacon.TODO)
+		else:
+			hud.set_beacon("Balises · %d s" % secs, Beacon.TODO)
+	elif reveal_on and rv.has(me) and role == "runner":
 		hud.set_beacon("Repéré · %d s" % ceili(float(g.rvt)), Hud.RED)
 	elif reveal_on and role == "hunter":
 		hud.set_beacon("%d repéré%s · %d s" % [rv.size(), "s" if rv.size() > 1 else "", ceili(float(g.rvt))], Hud.RED)
@@ -560,18 +573,20 @@ func _update_beacon(g: Dictionary, role: String) -> void:
 
 
 ## Where a world point lands on screen, pinned to the screen edge when it is
-## off to the side or behind the camera.
+## off to the side or behind the camera. The top band (timer, player list) and
+## the bottom band (speed, hints) are kept clear.
 func _screen_point(p: Vector3) -> Vector2:
 	var cam := player.camera
 	var vp := get_viewport().get_visible_rect().size
-	var margin := Vector2(60, 70)
+	var lo := Vector2(60, 160)
+	var hi := vp - Vector2(60, 110)
 	var sp: Vector2
 	if cam.is_position_behind(p):
 		var local := cam.global_transform.affine_inverse() * p
-		sp = Vector2(margin.x if local.x < 0.0 else vp.x - margin.x, vp.y * 0.5)
+		sp = Vector2(lo.x if local.x < 0.0 else hi.x, vp.y * 0.5)
 	else:
 		sp = cam.unproject_position(p)
-	return sp.clamp(margin, vp - margin)
+	return sp.clamp(lo, hi)
 
 
 static func _fmt_time(t: float) -> String:

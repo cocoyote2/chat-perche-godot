@@ -71,7 +71,7 @@ Touches par défaut, modifiables dans le menu (bouton **Touches**, aussi accessi
 
 - **Dispersion (10 s)** : le chasseur est bloqué et aveuglé, les chassés s'enfuient.
 - **Chasse (2 min 30)** : le chasseur touche les chassés. Un chassé touché passe en vol libre jusqu'à la manche suivante.
-- **Balises** : pendant la chasse, une balise apparaît régulièrement à un endroit au hasard (sur un toit ou à un carrefour), signalée par une colonne de lumière. Les chassés ont 25 s pour l'atteindre (+50). Ceux qui la ratent sont repérés : le chasseur les voit à travers les murs pendant 6 s. Le chasseur voit aussi la balise.
+- **Balises** : pendant la chasse, des vagues de 3 balises apparaissent régulièrement à des endroits au hasard (sur les toits ou aux carrefours), signalées par des colonnes de lumière. Les chassés ont 25 s pour en atteindre au moins une, et chaque balise atteinte rapporte +50. Ceux qui n'en atteignent aucune sont repérés : le chasseur les voit à travers les murs pendant 6 s. Le chasseur voit aussi les balises.
 - **Fin** : le chasseur gagne s'il touche tout le monde, sinon les chassés gagnent.
 - **Points** : +100 par chassé touché, +150 si le chasseur gagne. Chaque seconde de survie rapporte 2 points, et chaque chassé encore libre à la fin gagne +100.
 - Le chasseur change à chaque manche : c'est celui qui l'a été le moins souvent.

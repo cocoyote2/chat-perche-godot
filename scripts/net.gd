@@ -7,8 +7,9 @@ extends Node
 ## phases, who hunts, who is caught, scores. It validates tags against the last
 ## positions it received and pushes the game state to everyone.
 ##
-## Beacons: during the chase the server keeps sending runners to a random spot.
-## Reaching it in time scores; missing it reveals the runner to the hunter.
+## Beacons: during the chase the server keeps putting up a few beacons at random
+## spots. Each one reached scores; a runner who reaches none of them in time is
+## revealed to the hunter.
 
 signal roster_changed
 signal joined
@@ -20,12 +21,14 @@ const MAX_CLIENTS := 15
 const HIDE_T := 10.0
 const ROUND_T := 150.0
 const END_T := 9.0
-const BEACON_FIRST := 15.0   # into the chase before the first beacon
-const BEACON_T := 25.0       # time runners get to reach it
-const BEACON_GAP := 10.0     # pause between two beacons
+const BEACON_COUNT := 3      # beacons up at the same time
+const BEACON_FIRST := 15.0   # into the chase before the first wave
+const BEACON_T := 25.0       # time runners get to reach one of them
+const BEACON_GAP := 10.0     # pause between two waves
 const BEACON_R := 3.0        # horizontal reach, in metres
-const BEACON_MIN_MOVE := 25.0  # a new beacon is at least this far from the last
-const BEACON_PTS := 50.0
+const BEACON_SPREAD := 20.0  # beacons of one wave are at least this far apart
+const BEACON_MIN_MOVE := 25.0  # ...and this far from those of the last wave
+const BEACON_PTS := 50.0     # per beacon reached
 const REVEAL_T := 6.0        # runners who missed it show through walls this long
 
 var mode := "none"          # none, solo, host, client
@@ -37,15 +40,15 @@ var states := {}            # peer id -> Array of {"t": msec, "d": PackedFloat32
 var g := new_g()
 var local_pos := Vector3.ZERO
 var beacon_spots: Array[Vector3] = []   # filled from the World, also on a dedicated server
-var _last_beacon := Vector3(1e6, 0, 0)
+var _last_beacons: Array = []
 var _g_acc := 0.0
 var _g_seq := 0
 var _ending := false
 
 
 static func new_g() -> Dictionary:
-	# b: current beacon {p, t, ok} or {}; bn: time to the next one;
-	# rv: runners revealed for missing it, rvt: how long they stay revealed
+	# b: current wave {p: [Vector3], t, ok: [[ids] per beacon]} or {}; bn: time to
+	# the next wave; rv: runners revealed for missing it, rvt: how long they stay so
 	return {"ph": "lobby", "r": 0, "h": 0, "t": 0.0, "pl": [], "c": [], "sc": {}, "hc": {}, "w": "",
 		"b": {}, "bn": 0.0, "rv": [], "rvt": 0.0, "seq": 0}
 
@@ -380,7 +383,15 @@ func _clear_beacons() -> void:
 	g.b = {}
 	g.rv = []
 	g.rvt = 0.0
-	_last_beacon = Vector3(1e6, 0, 0)
+	_last_beacons = []
+
+
+## True once runner u has reached any beacon of the wave b.
+static func beacon_reached(b: Dictionary, u: int) -> bool:
+	for ids in b.get("ok", []):
+		if (ids as Array).has(u):
+			return true
+	return false
 
 
 func _beacon_tick(dt: float, alive: Array) -> void:
@@ -391,30 +402,32 @@ func _beacon_tick(dt: float, alive: Array) -> void:
 			g.rvt = 0.0
 	if g.b.is_empty():
 		g.bn = float(g.bn) - dt
-		# no beacon that could not close before the round ends
+		# no wave that could not close before the round ends
 		if g.bn <= 0.0 and float(g.t) > BEACON_T + 3.0 and not beacon_spots.is_empty():
-			_new_beacon()
+			_new_beacons()
 			_push_g(true)
 		return
 	var b: Dictionary = g.b
 	b.t = float(b.t) - dt
-	var p: Vector3 = b.p
 	var changed := false
-	for u in alive:
-		if (b.ok as Array).has(u):
-			continue
-		var up = pos_of(u)
-		if up == null:
-			continue
-		var d: Vector3 = (up as Vector3) - p
-		if Vector2(d.x, d.z).length() <= BEACON_R and absf(d.y) < 2.5:
-			(b.ok as Array).append(u)
-			g.sc[u] = float(g.sc.get(u, 0.0)) + BEACON_PTS
-			changed = true
+	for i in (b.p as Array).size():
+		var p: Vector3 = b.p[i]
+		var ok: Array = b.ok[i]
+		for u in alive:
+			if ok.has(u):
+				continue
+			var up = pos_of(u)
+			if up == null:
+				continue
+			var d: Vector3 = (up as Vector3) - p
+			if Vector2(d.x, d.z).length() <= BEACON_R and absf(d.y) < 2.5:
+				ok.append(u)
+				g.sc[u] = float(g.sc.get(u, 0.0)) + BEACON_PTS
+				changed = true
 	if b.t <= 0.0:
 		var missed := []
 		for u in alive:
-			if not (b.ok as Array).has(u):
+			if not beacon_reached(b, u):
 				missed.append(u)
 		g.rv = missed
 		g.rvt = REVEAL_T if not missed.is_empty() else 0.0
@@ -425,10 +438,27 @@ func _beacon_tick(dt: float, alive: Array) -> void:
 		_push_g(true)
 
 
-func _new_beacon() -> void:
-	var far := beacon_spots.filter(func(s: Vector3) -> bool: return s.distance_to(_last_beacon) >= BEACON_MIN_MOVE)
-	if far.is_empty():
-		far = beacon_spots
-	var p: Vector3 = far[randi() % far.size()]
-	_last_beacon = p
-	g.b = {"p": p, "t": BEACON_T, "ok": []}
+## Picks a wave of spread-out spots, away from the previous wave.
+func _new_beacons() -> void:
+	var pool := beacon_spots.duplicate()
+	pool.shuffle()
+	var picked: Array = []
+	for strict in [true, false]:   # relax the distances if the map runs out
+		for s: Vector3 in pool:
+			if picked.size() >= BEACON_COUNT:
+				break
+			if picked.has(s):
+				continue
+			var ok := true
+			if strict:
+				for q: Vector3 in picked:
+					ok = ok and s.distance_to(q) >= BEACON_SPREAD
+				for q: Vector3 in _last_beacons:
+					ok = ok and s.distance_to(q) >= BEACON_MIN_MOVE
+			if ok:
+				picked.append(s)
+	_last_beacons = picked
+	var oks := []
+	for p in picked:
+		oks.append([])
+	g.b = {"p": picked, "t": BEACON_T, "ok": oks}
