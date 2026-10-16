@@ -16,6 +16,7 @@ var skin := StandardMaterial3D.new()
 var marker_mat := StandardMaterial3D.new()
 var marker: MeshInstance3D
 var label: Label3D
+var shield: MeshInstance3D
 var phase := 0.0
 var styled := ""
 var xray := false
@@ -60,6 +61,21 @@ func _init() -> void:
 	label.outline_size = 10
 	label.pixel_size = 0.006
 	add_child(label)
+	shield = MeshInstance3D.new()   # bubble while the "Bouclier" bonus is held
+	var bubble := SphereMesh.new()
+	bubble.radius = 1.0
+	bubble.height = 2.2
+	shield.mesh = bubble
+	var sm := StandardMaterial3D.new()
+	sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	sm.albedo_color = Color(Bonus.color_of("shield"), 0.22)
+	shield.material_override = sm
+	shield.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	shield.position.y = 1.0
+	shield.visible = false
+	add_child(shield)
 
 
 func _part(parent: Node3D, size: Vector3, mat: Material, pos: Vector3) -> MeshInstance3D:
@@ -136,6 +152,10 @@ func style(color: Color, hunter: bool, player_name: String) -> void:
 	marker.visible = hunter
 	label.text = player_name + ("  ·  chasseur" if hunter else "")
 	label.modulate = Color("#ffb3ad") if hunter else Color.WHITE
+
+
+func set_shield(on: bool) -> void:
+	shield.visible = on
 
 
 func set_xray(on: bool) -> void:

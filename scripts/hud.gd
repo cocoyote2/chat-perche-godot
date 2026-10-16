@@ -65,6 +65,7 @@ var players_box: VBoxContainer
 var speed_l: Label
 var speed_fill: ColorRect
 var combo_l: Label
+var effect_l: Label
 var stamina_box: HBoxContainer
 var stamina_fill: ColorRect
 var flash_l: Label
@@ -250,7 +251,7 @@ func _build_game() -> void:
 	game_root.add_child(players_box)
 
 	var speed := _box(true, 4)
-	_place(speed, 0, 1, 0, 1, 18, -150, 320, -18)
+	_place(speed, 0, 1, 0, 1, 18, -185, 320, -18)   # room for the bonus line
 	speed.alignment = BoxContainer.ALIGNMENT_END
 	speed_l = _label("0 km/h", 52, f_display_it)
 	var bar_bg := ColorRect.new()
@@ -264,6 +265,9 @@ func _build_game() -> void:
 	speed_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bar_bg.add_child(speed_fill)
 	combo_l = _label("", 20, f_display, RED)
+	effect_l = _label("", 20, f_display)
+	effect_l.uppercase = true
+	effect_l.visible = false
 	stamina_box = _box(false, 8)
 	var st_bg := ColorRect.new()
 	st_bg.color = Color(1, 1, 1, 0.18)
@@ -277,6 +281,7 @@ func _build_game() -> void:
 	st_bg.add_child(stamina_fill)
 	stamina_box.add_child(st_bg)
 	stamina_box.add_child(_label("ENDURANCE", 13, f_display, MUTED))
+	speed.add_child(effect_l)
 	speed.add_child(speed_l)
 	speed.add_child(bar_bg)
 	speed.add_child(stamina_box)
@@ -506,6 +511,7 @@ func _fill_help() -> void:
 		["Rebords", "En l'air face à un rebord : %s pour s'agripper et se hisser." % jump],
 		[Keys.name_of("tag"), "Chasseur : toucher un chassé dans le viseur, de près."],
 		[Keys.name_of("pulse"), "Chasseur : sonar, révèle les chassés à travers les murs."],
+		["Bonus", "À ramasser sur la carte : Turbo (vitesse), Ressort (sauts), Second souffle (sprint gratuit), Bouclier (bloque un contact du chasseur ; pour le chasseur, recharge le sonar)."],
 		["Balises", "Chassé : rejoins au moins une des balises (colonnes de lumière) avant la fin du compte à rebours, +50 par balise. Sinon, le chasseur te voit à travers les murs 6 s."],
 		[Keys.name_of("start_round"), "Lancer la manche (2 joueurs minimum)."],
 		["%s · Échap" % Keys.name_of("scores"), "Scores · menu"],
@@ -675,6 +681,13 @@ func set_stamina(v: float, exhausted: bool, sprinting: bool, visible_now: bool) 
 	stamina_box.visible = visible_now
 	stamina_fill.size = Vector2(180.0 * clampf(v, 0.0, 1.0), 8)
 	stamina_fill.color = RED if exhausted else (INK if sprinting else Color("#7fd0ff"))
+
+
+## Bonus effect in use, above the speed ("" hides it).
+func set_effect(text: String, color := INK) -> void:
+	effect_l.visible = text != ""
+	effect_l.text = text
+	effect_l.add_theme_color_override("font_color", color)
 
 
 func set_danger(v: float) -> void:

@@ -7,6 +7,7 @@ var world: World
 var p: Player
 var failures := 0
 var max_v := 0.0
+var max_y := 0.0
 
 
 func _initialize() -> void:
@@ -124,6 +125,24 @@ func _run() -> void:
 	_check("spam du saut glissé : %d sauts, %.1f -> %.1f m/s (pointe %.1f)" % [jumps[0], before, p.hspeed(), max_v],
 		jumps[0] >= 3 and max_v <= before + 0.9 and p.hspeed() <= Player.RUN_RUNNER + 0.3, log)
 
+	# 12. bonus "Ressort": higher jumps
+	p.set_pos(Vector3(-52.0, 0, (rec.z0 + -58.0) / 2.0), -PI / 2)
+	log = await _sim([{"ax": Vector2(0, 0), "t": 0.2}, {"ax": Vector2(0, 0), "jump": true, "t": 0.9}])
+	var plain := max_y
+	p.jump_mul = 1.4
+	log += await _sim([{"ax": Vector2(0, 0), "jump": true, "t": 1.1}])
+	p.jump_mul = 1.0
+	_check("Ressort : saut de %.2f m au lieu de %.2f m" % [max_y, plain], max_y > plain * 1.7, log)
+
+	# 13. bonus "Second souffle": sprint without using stamina, even while exhausted
+	p.set_pos(Vector3(-52.0, 0, (rec.z0 + -58.0) / 2.0), -PI / 2)
+	p.stamina = 0.5
+	p.exhausted = true
+	p.free_sprint = true
+	log = await _sim([{"ax": Vector2(0, 1), "sprint": true, "t": 0.8}])
+	p.free_sprint = false
+	_check("Second souffle : sprint gratuit (%.1f m/s, endurance %.0f %%)" % [p.hspeed(), p.stamina * 100.0], p.hspeed() > 10.0 and p.stamina >= 0.5, log)
+
 	print("\n%s" % ("TOUS LES TESTS PASSENT" if failures == 0 else "%d ÉCHEC(S)" % failures))
 	quit(1 if failures > 0 else 0)
 
@@ -133,6 +152,7 @@ func _sim(steps: Array) -> String:
 	var last := ""
 	var t := 0.0
 	max_v = 0.0
+	max_y = -INF
 	for s in steps:
 		p.sim_axes = s.get("ax", Vector2.ZERO)
 		p.sim_slide = s.get("slide", false)
@@ -151,6 +171,7 @@ func _sim(steps: Array) -> String:
 			await physics_frame
 			t += 1.0 / 120.0
 			max_v = maxf(max_v, p.hspeed())
+			max_y = maxf(max_y, p.position.y)
 			var st := p.st + ("/g" if p.grounded else "/a")
 			if st != last:
 				out += "  %.2fs %-9s y=%5.2f v=%4.1f\n" % [t, st, p.position.y, p.hspeed()]

@@ -66,6 +66,8 @@ var cam_roll := 0.0
 var step_acc := 0.0
 var run_speed := RUN_RUNNER
 var sprint_speed := SPRINT_RUNNER
+var jump_mul := 1.0        # bonus "Ressort"
+var free_sprint := false   # bonus "Second souffle": sprint without using stamina
 var stamina := 1.0
 var exhausted := false
 var sprinting := false
@@ -307,7 +309,7 @@ func step(dt: float) -> void:
 			else:
 				jump_buf = 0.0
 				jumped = true
-				velocity.y = JUMP
+				velocity.y = JUMP * jump_mul
 				grounded = false
 				coyote = 0.0
 				if st == "slide":
@@ -329,7 +331,7 @@ func step(dt: float) -> void:
 	elif not grounded and st == "move" and coyote > 0.0 and jump_buf > 0.0:
 		jump_buf = 0.0
 		jumped = true
-		velocity.y = JUMP
+		velocity.y = JUMP * jump_mul
 		coyote = 0.0
 		sfx.emit("jump", 1.0)
 
@@ -453,8 +455,10 @@ func step(dt: float) -> void:
 ## Sprint only counts on the ground while running upright. Leaving the ground
 ## keeps the speed already gained but stops draining the bar.
 func _update_stamina(dt: float, moving: bool) -> void:
-	sprinting = grounded and st == "move" and moving and h >= HS - 0.01 and not exhausted and sprint_held()
-	if sprinting:
+	sprinting = grounded and st == "move" and moving and h >= HS - 0.01 and (free_sprint or not exhausted) and sprint_held()
+	if sprinting and free_sprint:
+		_regen_wait = 0.0
+	elif sprinting:
 		stamina -= STAMINA_DRAIN * dt
 		_regen_wait = STAMINA_REGEN_DELAY
 		if stamina <= 0.0:

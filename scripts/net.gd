@@ -10,11 +10,15 @@ extends Node
 ## Beacons: during the chase the server keeps putting up a few beacons at random
 ## spots. Each one reached scores; a runner who reaches none of them in time is
 ## revealed to the hunter.
+##
+## Bonuses: pickups the server scatters over the map during a round. Walking
+## over one gives its effect for a few seconds (one effect at a time).
 
 signal roster_changed
 signal joined
 signal session_ended(reason: String)
 signal caught_event(target: int, hunter: int)
+signal shield_event(target: int, hunter: int)
 
 const PORT := 7777
 const MAX_CLIENTS := 15
@@ -30,6 +34,13 @@ const BEACON_SPREAD := 20.0  # beacons of one wave are at least this far apart
 const BEACON_MIN_MOVE := 25.0  # ...and this far from those of the last wave
 const BEACON_PTS := 50.0     # per beacon reached
 const REVEAL_T := 6.0        # runners who missed it show through walls this long
+const BONUS_KINDS := ["speed", "jump", "stamina", "shield"]
+const BONUS_DUR := {"speed": 6.0, "jump": 8.0, "stamina": 8.0, "shield": 15.0, "sonar": 0.5}
+const BONUS_START := 2       # on the map when a round starts
+const BONUS_EVERY := 8.0     # then one more this often...
+const BONUS_MAX := 4         # ...up to this many at once
+const BONUS_R := 1.6         # pick-up reach, in metres
+const BONUS_GAP := 15.0      # bonuses keep this far apart
 
 var mode := "none"          # none, solo, host, client
 var dedicated := false
@@ -49,8 +60,10 @@ var _ending := false
 static func new_g() -> Dictionary:
 	# b: current wave {p: [Vector3], t, ok: [[ids] per beacon]} or {}; bn: time to
 	# the next wave; rv: runners revealed for missing it, rvt: how long they stay so
+	# pu: bonuses on the map [{p, k, id}]; pn: time to the next one;
+	# fx: effect held by a player {id: {k, t, n}}, n changing on every pick-up
 	return {"ph": "lobby", "r": 0, "h": 0, "t": 0.0, "pl": [], "c": [], "sc": {}, "hc": {}, "w": "",
-		"b": {}, "bn": 0.0, "rv": [], "rvt": 0.0, "seq": 0}
+		"b": {}, "bn": 0.0, "rv": [], "rvt": 0.0, "pu": [], "pn": 0.0, "fx": {}, "seq": 0}
 
 
 func _ready() -> void:
@@ -238,12 +251,22 @@ func _srv_start() -> void:
 func _srv_tag(target: int) -> void:
 	if not multiplayer.is_server():
 		return
-	var s := _sender()
+	_srv_tag_from(_sender(), target)
+
+
+## Hunter s claims to have touched target: checked against the last positions.
+func _srv_tag_from(s: int, target: int) -> void:
 	if g.ph != "run" or s != int(g.h) or not g.pl.has(target) or target == s or g.c.has(target):
 		return
 	var hp = pos_of(s)
 	var tp = pos_of(target)
 	if hp != null and tp != null and (hp as Vector3).distance_to(tp as Vector3) > 7.0:
+		return
+	if str(g.fx.get(target, {}).get("k", "")) == "shield":   # the shield takes the hit
+		g.fx.erase(target)
+		_push_g(true)
+		shield_fx.rpc(target, s)
+		shield_event.emit(target, s)
 		return
 	g.c.append(target)
 	g.sc[s] = float(g.sc.get(s, 0.0)) + 100.0
@@ -255,6 +278,11 @@ func _srv_tag(target: int) -> void:
 @rpc("authority", "call_remote", "reliable")
 func caught_fx(target: int, hunter: int) -> void:
 	caught_event.emit(target, hunter)
+
+
+@rpc("authority", "call_remote", "reliable")
+func shield_fx(target: int, hunter: int) -> void:
+	shield_event.emit(target, hunter)
 
 
 # ------------------------------------------------------------------ game state
@@ -299,7 +327,7 @@ func gstate_r(ng: Dictionary) -> void:
 func _apply_g(ng: Dictionary) -> void:
 	if int(ng.get("seq", 0)) < int(g.get("seq", 0)):
 		return
-	for k in ["ph", "r", "h", "t", "pl", "c", "sc", "hc", "w", "b", "rv", "rvt"]:
+	for k in ["ph", "r", "h", "t", "pl", "c", "sc", "hc", "w", "b", "rv", "rvt", "pu", "fx"]:
 		if not ng.has(k):
 			return
 	g = ng
@@ -317,6 +345,7 @@ func _host_tick(dt: float) -> void:
 				g.ph = "run"
 				g.t = ROUND_T
 				_push_g(true)
+			_bonus_tick(dt)
 		"run":
 			g.t -= dt
 			var alive := []
@@ -326,6 +355,7 @@ func _host_tick(dt: float) -> void:
 			for u in alive:
 				g.sc[u] = float(g.sc.get(u, 0.0)) + dt * 2.0
 			_beacon_tick(dt, alive)
+			_bonus_tick(dt)
 			if not present.has(g.h):
 				_end_round("abort", alive)
 			elif alive.is_empty():
@@ -362,6 +392,11 @@ func _new_round() -> void:
 	g.t = HIDE_T
 	_clear_beacons()
 	g.bn = BEACON_FIRST
+	g.pu = []
+	g.fx = {}
+	g.pn = BONUS_EVERY
+	for i in BONUS_START:
+		_spawn_bonus()
 
 
 func _end_round(winner: String, alive: Array) -> void:
@@ -369,6 +404,8 @@ func _end_round(winner: String, alive: Array) -> void:
 	g.t = END_T
 	g.w = winner
 	_clear_beacons()
+	g.pu = []
+	g.fx = {}
 	if winner == "hunter":
 		g.sc[g.h] = float(g.sc.get(g.h, 0.0)) + 150.0
 	elif winner == "runners":
@@ -462,3 +499,66 @@ func _new_beacons() -> void:
 	for p in picked:
 		oks.append([])
 	g.b = {"p": picked, "t": BEACON_T, "ok": oks}
+
+
+# ------------------------------------------------------------------ bonuses
+
+var _bonus_id := 0
+
+
+func _bonus_tick(dt: float) -> void:
+	var changed := false
+	for u in g.fx.keys():
+		var fx: Dictionary = g.fx[u]
+		fx.t = float(fx.t) - dt
+		if fx.t <= 0.0:
+			g.fx.erase(u)
+			changed = true
+	g.pn = float(g.pn) - dt
+	if g.pn <= 0.0:
+		g.pn = BONUS_EVERY
+		if (g.pu as Array).size() < BONUS_MAX and _spawn_bonus():
+			changed = true
+	# anyone still in the round picks up what they walk over
+	var present := players.keys()
+	for i in range((g.pu as Array).size() - 1, -1, -1):
+		var bonus: Dictionary = g.pu[i]
+		var p: Vector3 = bonus.p
+		for u in g.pl:
+			if g.c.has(u) or not present.has(u) or (g.ph == "hide" and u == int(g.h)):
+				continue
+			var up = pos_of(u)
+			if up == null:
+				continue
+			var d: Vector3 = (up as Vector3) - p
+			if Vector2(d.x, d.z).length() <= BONUS_R and absf(d.y) < 2.2:
+				var k := str(bonus.k)
+				if k == "shield" and u == int(g.h):
+					k = "sonar"   # the hunter has no use for a shield: recharge the sonar
+				_bonus_id += 1
+				g.fx[u] = {"k": k, "t": BONUS_DUR[k], "n": _bonus_id}
+				(g.pu as Array).remove_at(i)
+				changed = true
+				break
+	if changed:
+		_push_g(true)
+
+
+## Adds a bonus on a free spot, away from the other bonuses and the beacons.
+func _spawn_bonus() -> bool:
+	var pool := beacon_spots.duplicate()
+	pool.shuffle()
+	var avoid: Array = []
+	for bonus in g.pu:
+		avoid.append(bonus.p)
+	for p in g.b.get("p", []):
+		avoid.append(p)
+	for s: Vector3 in pool:
+		var ok := true
+		for q: Vector3 in avoid:
+			ok = ok and s.distance_to(q) >= BONUS_GAP
+		if ok:
+			_bonus_id += 1
+			(g.pu as Array).append({"p": s, "k": BONUS_KINDS[randi() % BONUS_KINDS.size()], "id": _bonus_id})
+			return true
+	return false

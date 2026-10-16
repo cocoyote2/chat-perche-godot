@@ -29,6 +29,9 @@ var heart_t := 0.0
 var beacons: Array[Beacon] = []
 var last_wave := ""        # positions of the wave already announced
 var my_reached := 0        # beacons of this wave I have reached
+var bonus_nodes := {}      # bonus id -> Bonus lying on the map
+var last_fx_n := -1        # pick-up already announced
+var speed_mul := 1.0       # bonus "Turbo"
 var reveal_seen := false
 var board_held := false
 var settings := ConfigFile.new()
@@ -76,6 +79,7 @@ func _ready() -> void:
 	Net.joined.connect(_on_joined)
 	Net.session_ended.connect(_on_session_ended)
 	Net.caught_event.connect(_on_caught_event)
+	Net.shield_event.connect(_on_shield_event)
 
 	hud.name_edit.text = str(settings.get_value("player", "name", ""))
 	hud._pick_color(int(settings.get_value("player", "color", randi() % COLORS.size())))
@@ -225,6 +229,7 @@ func _exit_game() -> void:
 	sfx.play("slide_off")
 	for bc in beacons:
 		bc.visible = false
+	_update_bonuses(Net.new_g(), false)   # clears the pickups and my effect
 	hud.set_beacon("", Hud.INK)
 	hud.hide_beacon_markers()
 	last_wave = ""
@@ -325,7 +330,10 @@ func _try_tag() -> void:
 	if g.ph != "run" or int(g.h) != Net.me() or tag_cd > 0.0 or player.st == "spec":
 		return
 	var target := _aim_target()
-	if target != 0:
+	if target != 0 and str((g.fx as Dictionary).get(target, {}).get("k", "")) == "shield":
+		Net.request_tag(target)   # the server spends the shield; _on_shield_event gives the feedback
+		tag_cd = 0.3
+	elif target != 0:
 		Net.request_tag(target)
 		avatars[target].set_meta("tagged_round", int(g.r))
 		sfx.play("tag")
@@ -415,8 +423,8 @@ func _process(delta: float) -> void:
 	player.frozen = role == "hunter" and g.ph == "hide"
 	if player.frozen:
 		player.position = world.hunter_spawn
-	player.run_speed = Player.RUN_HUNTER if role == "hunter" else Player.RUN_RUNNER
-	player.sprint_speed = Player.SPRINT_HUNTER if role == "hunter" else Player.SPRINT_RUNNER
+	player.run_speed = (Player.RUN_HUNTER if role == "hunter" else Player.RUN_RUNNER) * speed_mul
+	player.sprint_speed = (Player.SPRINT_HUNTER if role == "hunter" else Player.SPRINT_RUNNER) * speed_mul
 
 	if g.ph != last_phase:
 		if g.ph == "run":
@@ -463,10 +471,12 @@ func _process(delta: float) -> void:
 		av.show_sample(s, delta, now / 1000.0)
 		# the sonar, or a beacon the runner missed, shows them through walls
 		av.set_xray(role == "hunter" and not is_hunter and (pulse_t > 0.0 or (g.rv as Array).has(id)))
+		av.set_shield(round_live and str((g.fx as Dictionary).get(id, {}).get("k", "")) == "shield")
 		if is_hunter:
 			hunter_dist = av.position.distance_to(player.position)
 
 	_update_beacon(g, role)
+	_update_bonuses(g, round_live)
 
 	# ---- feedback
 	var danger := clampf((24.0 - hunter_dist) / 20.0, 0.0, 1.0) if role == "runner" and g.ph == "run" else 0.0
@@ -570,6 +580,57 @@ func _update_beacon(g: Dictionary, role: String) -> void:
 		hud.set_beacon("%d repéré%s · %d s" % [rv.size(), "s" if rv.size() > 1 else "", ceili(float(g.rvt))], Hud.RED)
 	else:
 		hud.set_beacon("", Hud.INK)
+
+
+## Pickups on the map follow the game state; the effect I hold drives the player.
+func _update_bonuses(g: Dictionary, round_live: bool) -> void:
+	var seen := {}
+	if round_live:
+		for bonus in g.pu:
+			var id := int(bonus.id)
+			seen[id] = true
+			if not bonus_nodes.has(id):
+				var node := Bonus.new(str(bonus.k))
+				world.add_child(node)
+				node.position = bonus.p
+				bonus_nodes[id] = node
+	for id in bonus_nodes.keys():
+		if not seen.has(id):
+			bonus_nodes[id].queue_free()
+			bonus_nodes.erase(id)
+
+	var fx: Dictionary = (g.fx as Dictionary).get(Net.me(), {}) if round_live else {}
+	var k := str(fx.get("k", ""))
+	if not fx.is_empty() and int(fx.n) != last_fx_n:
+		last_fx_n = int(fx.n)
+		sfx.play("bonus")
+		hud.flash_move(Bonus.name_of(k))
+		match k:
+			"stamina":
+				player.stamina = 1.0
+				player.exhausted = false
+			"sonar":
+				pulse_cd = 0.0
+				hud.message("Sonar rechargé")
+			"shield":
+				hud.message("Bouclier : le prochain contact du chasseur est bloqué")
+	speed_mul = 1.25 if k == "speed" else 1.0
+	player.jump_mul = 1.4 if k == "jump" else 1.0
+	player.free_sprint = k == "stamina"
+	if k == "" or k == "sonar":
+		hud.set_effect("")
+	else:
+		hud.set_effect("%s · %d s" % [Bonus.name_of(k), ceili(float(fx.t))], Bonus.color_of(k))
+
+
+func _on_shield_event(target: int, hunter: int) -> void:
+	if target == Net.me():
+		sfx.play("block")
+		hud.message("Ton bouclier a bloqué le chasseur !")
+		hud.flash_screen(0.2)
+	elif hunter == Net.me():
+		sfx.play("block")
+		hud.message("Bloqué par le bouclier de " + Net.player_name(target))
 
 
 ## Where a world point lands on screen, pinned to the screen edge when it is

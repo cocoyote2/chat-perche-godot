@@ -14,7 +14,7 @@ const SLIDE_LEVEL := 0.4
 # peak level of each finished sound, so they sit together in the mix
 const PEAK := {"step": 0.5, "jump": 0.5, "land": 0.85, "grab": 0.6, "whoosh": 0.55, "miss": 0.6,
 	"tag": 0.75, "caught": 0.6, "beep": 0.45, "beep_hi": 0.55, "heart": 0.85, "sonar": 0.6, "slide": 0.6,
-	"beacon": 0.55, "beacon_ok": 0.55, "reveal": 0.6}
+	"beacon": 0.55, "beacon_ok": 0.55, "reveal": 0.6, "bonus": 0.55, "block": 0.7}
 
 var _streams := {}   # name -> Array of AudioStreamWAV variants
 var _pool: Array[AudioStreamPlayer] = []
@@ -30,7 +30,7 @@ func _ready() -> void:
 		for v in VARIANTS[k]:
 			list.append(_wav(_make(k)))
 		_streams[k] = list
-	for k in ["tag", "caught", "beep", "beep_hi", "heart", "sonar", "beacon", "beacon_ok", "reveal"]:
+	for k in ["tag", "caught", "beep", "beep_hi", "heart", "sonar", "beacon", "beacon_ok", "reveal", "bonus", "block"]:
 		_streams[k] = [_wav(_make(k))]
 	for i in 12:
 		var p := AudioStreamPlayer.new()
@@ -217,6 +217,22 @@ func _make_beacon_ok() -> PackedFloat32Array:
 	var notes := [1046.5, 1318.5, 1568.0, 2093.0]   # C6 E6 G6 C7
 	for i in notes.size():
 		_add(o, _tone(0.4, notes[i], notes[i], 0.003, 0.09 + 0.05 * i), 0.055 * i, 0.32)
+	return o
+
+
+func _make_bonus() -> PackedFloat32Array:
+	var o := _buf(0.6)
+	_add(o, _noise_bell(0.22, 600.0, 3600.0, 2.0, 1.0), 0, 0.35)   # rising sparkle
+	_add(o, _tone(0.35, 784.0, 1568.0, 0.003, 0.1), 0, 0.3)         # quick upward slide
+	_add(o, _bell(0.45, 2093.0, 0.14), 0.12, 0.3)                    # ...landing on a chime
+	return o
+
+
+func _make_block() -> PackedFloat32Array:
+	var o := _buf(0.7)
+	_add(o, _noise(0.05, 2500.0, 1500.0, 1.0, "band", 0.0, 0.01), 0, 0.6)   # impact
+	_add(o, _bell(0.65, 523.3, 0.25), 0, 0.5)                                # metal ring
+	_add(o, _bell(0.5, 659.3, 0.18), 0.01, 0.3)
 	return o
 
 
