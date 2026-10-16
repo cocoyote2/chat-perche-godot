@@ -25,6 +25,7 @@ const STAMINA_DRAIN := 0.22      # per second of sprint: ~4.5 s from full
 const STAMINA_REGEN := 0.25      # per second once recovering: 4 s to refill
 const STAMINA_REGEN_DELAY := 0.8 # pause after sprinting before it refills
 const STAMINA_RECOVER := 0.3     # once empty, sprint is locked until this level
+const STAMINA_JUMP := 0.12       # per jump of any kind: ~8 jumps from full
 const AXES: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 var world: World
@@ -307,15 +308,18 @@ func step(dt: float) -> void:
 				wb = world.wall_probe(position, fn, 1.2, 0.5, 1.7)
 			if wb != null and wb.y1 - position.y > 1.4 and st == "move":
 				jump_buf = 0.0
+				_spend_jump()
 				_start_climb(fn, wb)
 			else:
 				jump_buf = 0.0
+				_spend_jump()
 				velocity.y = JUMP
 				grounded = false
 				coyote = 0.0
 				if st == "slide":
-					var hh := hspeed()
-					_scale_h(minf(hh + 0.8, VMAX), hh)
+					if not exhausted:
+						var hh := hspeed()
+						_scale_h(minf(hh + 0.8, VMAX), hh)
 					_combo("Saut glissé")
 					sfx.emit("slide_off", 0.0)
 				st = "move"
@@ -325,6 +329,7 @@ func step(dt: float) -> void:
 			_start_slide(false)
 	elif not grounded and st == "move" and coyote > 0.0 and jump_buf > 0.0:
 		jump_buf = 0.0
+		_spend_jump()
 		velocity.y = JUMP
 		coyote = 0.0
 		sfx.emit("jump", 1.0)
@@ -394,6 +399,7 @@ func step(dt: float) -> void:
 		if jump_buf > 0.0:
 			if fb != null and fb.y1 - position.y > 1.4 and not climb_used and air_t < 0.45 and velocity.y > -3.0:
 				jump_buf = 0.0
+				_spend_jump()
 				_start_climb(fn, fb)
 				return
 			for n in AXES:
@@ -402,6 +408,7 @@ func step(dt: float) -> void:
 				var b := world.wall_probe(position, n, 0.3, 0.4, 1.6)
 				if b != null and World.wall_key(n, b) != last_wall_key:
 					jump_buf = 0.0
+					_spend_jump()
 					last_wall_key = World.wall_key(n, b)
 					velocity.x += n.x * 5.5
 					velocity.z += n.y * 5.5
@@ -426,6 +433,7 @@ func step(dt: float) -> void:
 			along = -along
 		if jump_buf > 0.0:
 			jump_buf = 0.0
+			_spend_jump()
 			var s := minf(wr_speed + 1.0, VMAX)
 			var hv := along * s + n * 5.5
 			velocity = Vector3(hv.x, JUMP * 0.95, hv.z)
@@ -461,6 +469,15 @@ func _update_stamina(dt: float, moving: bool) -> void:
 			stamina = minf(stamina + STAMINA_REGEN * dt, 1.0)
 		if exhausted and stamina >= STAMINA_RECOVER:
 			exhausted = false
+
+
+## Every jump costs stamina and delays the refill, so chaining slide-jumps
+## drains the bar. Once it is empty the slide boosts stop until it recovers.
+func _spend_jump() -> void:
+	stamina = maxf(stamina - STAMINA_JUMP, 0.0)
+	_regen_wait = STAMINA_REGEN_DELAY
+	if stamina <= 0.0:
+		exhausted = true
 
 
 func _scale_h(new_speed: float, cur: float) -> void:
@@ -553,7 +570,7 @@ func _start_slide(from_landing: bool) -> void:
 	st_t = 0.0
 	set_height(HL)
 	var hs := hspeed()
-	if slide_boost_cd <= 0.0 and hs > 0.1:
+	if slide_boost_cd <= 0.0 and hs > 0.1 and not exhausted:
 		_scale_h(minf(hs + 2.2, VMAX), hs)
 		slide_boost_cd = 1.2
 	_combo("Réception glissée" if from_landing else "Glissade")

@@ -83,10 +83,11 @@ func _run() -> void:
 	log = await _sim([{"ax": Vector2(0, 1), "sprint": true, "t": 0.8}])
 	_check("sprint au sol (%.1f m/s, endurance %.0f %%)" % [p.hspeed(), p.stamina * 100.0], p.hspeed() > 10.0 and p.stamina < 0.9, log)
 
-	# 8. no stamina used in the air, even with Shift held
+	# 8. a jump costs its fixed share, but no sprint drain in the air even with Shift held
 	var before_air := p.stamina
 	log = await _sim([{"ax": Vector2(0, 1), "sprint": true, "jump": true, "t": 0.5}])
-	_check("pas de sprint en l'air (endurance %.2f -> %.2f)" % [before_air, p.stamina], p.stamina >= before_air - 0.005, log)
+	var spent := before_air - p.stamina
+	_check("saut : seulement le coût du saut (endurance %.2f -> %.2f)" % [before_air, p.stamina], absf(spent - Player.STAMINA_JUMP) < 0.005, log)
 
 	# 9. an empty bar locks the sprint until it recovers
 	p.set_pos(Vector3(-52.0, 0, (rec.z0 + -58.0) / 2.0), -PI / 2)
@@ -103,6 +104,17 @@ func _run() -> void:
 	var was_climbing := p.st == "climb"
 	log += await _sim([{"ax": Vector2(0, 0), "jump": true, "t": 0.4}])
 	_check("plus de demi-tour mural", was_climbing and is_equal_approx(p.yaw, yaw_before), log)
+
+	# 11. jumping empties a low bar, and an empty bar gives no slide boost
+	p.set_pos(Vector3(-52.0, 0, (rec.z0 + -58.0) / 2.0), -PI / 2)
+	log = await _sim([{"ax": Vector2(0, 1), "t": 0.6}])
+	p.stamina = Player.STAMINA_JUMP * 0.5
+	log += await _sim([{"ax": Vector2(0, 1), "jump": true, "t": 0.8}])
+	_check("saut qui vide l'endurance", p.exhausted and p.stamina == 0.0, log)
+	before = p.hspeed()
+	p.slide_boost_cd = 0.0
+	log += await _sim([{"ax": Vector2(0, 1), "slide": true, "slide_press": true, "t": 0.1}])
+	_check("épuisé : glissade sans boost (%.1f -> %.1f m/s)" % [before, p.hspeed()], p.st == "slide" and p.hspeed() <= before + 0.1, log)
 
 	print("\n%s" % ("TOUS LES TESTS PASSENT" if failures == 0 else "%d ÉCHEC(S)" % failures))
 	quit(1 if failures > 0 else 0)
