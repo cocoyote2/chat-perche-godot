@@ -43,8 +43,9 @@ class Ramp:
 	var hi: float
 	var ax: String   # "x" or "z": the axis the slope runs along
 	var up: int      # +1: high end at x1/z1, -1: high end at x0/z0
+	var thick: float # < 0: solid down to the street; else a slab this thick (a bridge)
 
-	func _init(ax0: float, ax1: float, az0: float, az1: float, alo: float, ahi: float, aax: String, aup: int) -> void:
+	func _init(ax0: float, ax1: float, az0: float, az1: float, alo: float, ahi: float, aax: String, aup: int, athick := -1.0) -> void:
 		x0 = ax0
 		x1 = ax1
 		z0 = az0
@@ -53,6 +54,11 @@ class Ramp:
 		hi = ahi
 		ax = aax
 		up = aup
+		thick = athick
+
+	## Underside of the ramp at (x, z): the street for a solid ramp.
+	func bottom_at(x: float, z: float) -> float:
+		return 0.0 if thick < 0.0 else maxf(0.0, y_at(x, z) - thick)
 
 	func contains(x: float, z: float) -> bool:
 		return x >= x0 and x <= x1 and z >= z0 and z <= z1
@@ -84,6 +90,7 @@ var decor: Array = []          # render-only skyline boxes
 var buildings: Array = []      # one Dictionary per city block (null for the plaza)
 var spawns_runner: Array[Vector3] = []
 var beacon_spots: Array[Vector3] = []   # where the server may place a beacon
+var crate_steps: Array = []    # {p: street point in front, n: normal out of the wall, top: roof}
 var hunter_spawn := Vector3(0, 2.2, 0)
 
 var _grid := {}
@@ -139,9 +146,11 @@ func box_hit(x0: float, y0: float, z0: float, x1: float, y1: float, z1: float) -
 	return null
 
 
-func ramp_at(x: float, z: float) -> Ramp:
+## The ramp whose surface is under (x, z). With y given, only one whose surface
+## is within half a metre of y, so a runner under a bridge is not "on" it.
+func ramp_at(x: float, z: float, y := NAN) -> Ramp:
 	for r in ramps:
-		if r.contains(x, z):
+		if r.contains(x, z) and (is_nan(y) or absf(r.y_at(x, z) - y) < 0.5):
 			return r
 	return null
 
@@ -149,9 +158,9 @@ func ramp_at(x: float, z: float) -> Ramp:
 func is_free(x: float, y: float, z: float, h: float) -> bool:
 	if box_hit(x - R, y + 0.01, z - R, x + R, y + h, z + R) != null:
 		return false
-	var r := ramp_at(x, z)
-	if r != null and y < r.y_at(x, z) - 0.05:
-		return false
+	for r in ramps:
+		if r.contains(x, z) and y < r.y_at(x, z) - 0.05 and y + h > r.bottom_at(x, z) + 0.01:
+			return false
 	return true
 
 
@@ -162,8 +171,9 @@ func support_top(x: float, y: float, z: float, depth: float) -> float:
 		if x - R < b.x1 and x + R > b.x0 and z - R < b.z1 and z + R > b.z0 and b.y1 <= y + 0.01 and b.y1 >= y - depth:
 			if is_nan(best) or b.y1 > best:
 				best = b.y1
-	var r := ramp_at(x, z)
-	if r != null:
+	for r in ramps:
+		if not r.contains(x, z):
+			continue
 		var sy := r.y_at(x, z)
 		if sy <= y + 0.01 and sy >= y - depth and (is_nan(best) or sy > best):
 			best = sy
@@ -293,7 +303,9 @@ func _height_at(rec: Dictionary, x: float, z: float) -> float:
 func generate() -> void:
 	_rng.seed = 20261016
 	var lots := [-40.0, -20.0, 0.0, 20.0, 40.0]
-	var ht := [[4, 6, 8, 6, 4], [6, 9, 11, 9, 6], [8, 11, 0, 11, 8], [6, 9, 11, 9, 6], [4, 6, 8, 6, 4]]
+	# Roofs climb towards the centre one step at a time (1 to 1.5 m): heading in, a
+	# jump across the street ends in a vault; heading out, the bridges slide down.
+	var ht := [[4.5, 5.5, 6.5, 5.5, 4.5], [5.5, 7.0, 8.0, 7.0, 5.5], [6.5, 8.0, 0.0, 8.0, 6.5], [5.5, 7.0, 8.0, 7.0, 5.5], [4.5, 5.5, 6.5, 5.5, 4.5]]
 	var tints := [Color("#e8dccb"), Color("#d3dbe3"), Color("#e6cfbd"), Color("#d4dcc9"), Color("#ddd6cd"), Color("#d9d9d9")]
 	add_box(-300, -1, -300, 300, 0, 300, "ground")
 
@@ -302,67 +314,68 @@ func generate() -> void:
 			if i == 2 and j == 2:
 				buildings.append(null)
 				continue
-			var cx: float = lots[i] + (_rnd() - 0.5) * 1.6
-			var cz: float = lots[j] + (_rnd() - 0.5) * 1.6
-			var sx := 13.5 + _rnd() * 2.5
-			var sz := 13.5 + _rnd() * 2.5
-			var h: float = ht[j][i] + roundf((_rnd() - 0.5) * 2.0) * 0.5
-			var rec := {"x0": cx - sx / 2, "x1": cx + sx / 2, "z0": cz - sz / 2, "z1": cz + sz / 2, "h": h, "i": i, "j": j, "cx": cx, "cz": cz, "parts": []}
+			# 15-16 m blocks on a 20 m grid: streets of 3.6 to 5.2 m, jumpable at a run
+			var cx: float = lots[i] + (_rnd() - 0.5) * 0.8
+			var cz: float = lots[j] + (_rnd() - 0.5) * 0.8
+			var sx := 15.2 + _rnd() * 0.8
+			var sz := 15.2 + _rnd() * 0.8
+			var h: float = ht[j][i]
+			var rec := {"x0": cx - sx / 2, "x1": cx + sx / 2, "z0": cz - sz / 2, "z1": cz + sz / 2, "h": h, "i": i, "j": j, "cx": cx, "cz": cz, "parts": [], "ramp": ""}
 			var tint: Color = tints[_rng.randi() % tints.size()]
-			if _rnd() < 0.45:
-				var h2 := maxf(3.5, h + (2.5 if _rnd() < 0.5 else -2.5))
-				var f := 0.4 + _rnd() * 0.2
+			if _rnd() < 0.4:   # a terrace 1.5 m lower on one side: one more step to vault
+				var f := 0.3 + _rnd() * 0.15
+				var low_first := _rnd() < 0.5
+				var a := f if low_first else 1.0 - f
+				var ha := h - 1.5 if low_first else h
+				var hb := h if low_first else h - 1.5
 				if _rnd() < 0.5:
-					var xm: float = rec.x0 + sx * f
-					rec.parts = [[rec.x0, xm, rec.z0, rec.z1, h], [xm, rec.x1, rec.z0, rec.z1, h2]]
+					var xm: float = rec.x0 + sx * a
+					rec.parts = [[rec.x0, xm, rec.z0, rec.z1, ha], [xm, rec.x1, rec.z0, rec.z1, hb]]
 				else:
-					var zm: float = rec.z0 + sz * f
-					rec.parts = [[rec.x0, rec.x1, rec.z0, zm, h], [rec.x0, rec.x1, zm, rec.z1, h2]]
+					var zm: float = rec.z0 + sz * a
+					rec.parts = [[rec.x0, rec.x1, rec.z0, zm, ha], [rec.x0, rec.x1, zm, rec.z1, hb]]
 			else:
 				rec.parts = [[rec.x0, rec.x1, rec.z0, rec.z1, h]]
 			for p in rec.parts:
 				add_box(p[0], 0, p[2], p[1], p[4], p[3], "bld", tint)
 			buildings.append(rec)
+			_roof_course(rec)
 
-			# rooftop clutter: units to vault, the odd hut, pipes to slide under
-			for p in rec.parts:
-				var w: float = p[1] - p[0]
-				var d: float = p[3] - p[2]
-				var top: float = p[4]
-				for k in 1 + _rng.randi() % 3:
-					var ux: float = p[0] + 1.6 + _rnd() * (w - 4.6)
-					var uz: float = p[2] + 1.6 + _rnd() * (d - 4.4)
-					add_box(ux, top, uz, ux + 1.5, top + 0.9 + _rnd() * 0.35, uz + 1.3, "light")
-				if w * d > 60.0 and _rnd() < 0.35:
-					var hx: float = p[0] + 1.0 + _rnd() * (w - 5.0)
-					var hz: float = p[2] + 1.0 + _rnd() * (d - 4.5)
-					add_box(hx, top, hz, hx + 3.6, top + 2.6, hz + 3.0, "light")
-				if _rnd() < 0.3:
-					var zz: float = p[2] + 2.0 + _rnd() * (d - 4.0)
-					add_box(p[0] + 0.2, top + 1.15, zz, p[1] - 0.2, top + 1.45, zz + 0.3, "dark")
+	# street access: a long ramp along an outer wall of every outer block, and
+	# ramps from the plaza up onto the four blocks around it
+	for rec in buildings:
+		if rec == null:
+			continue
+		var outer := []
+		if rec.j == 0:
+			outer.append("n")
+		if rec.j == 4:
+			outer.append("s")
+		if rec.i == 0:
+			outer.append("w")
+		if rec.i == 4:
+			outer.append("e")
+		if not outer.is_empty():
+			_side_ramp(rec, outer[_rng.randi() % outer.size()])
+	_side_ramp(buildings[1 * 5 + 2], "s")
+	_side_ramp(buildings[3 * 5 + 2], "n")
+	_side_ramp(buildings[2 * 5 + 1], "e")
+	_side_ramp(buildings[2 * 5 + 3], "w")
 
-			# street crates against the walls
-			for k in 2 + _rng.randi() % 2:
-				var side := _rng.randi() % 4
-				var big := _rnd() < 0.35
-				var length := 2.2 if big else 1.2
-				var depth := 1.3 if big else 1.2
-				var hh := 1.3 if big else 1.2
-				var t := 1.0 + _rnd() * ((sz if side < 2 else sx) - 2.0 - length)
-				var kind := "dark" if big else "red"
-				var b: Box
-				if side == 0:
-					b = add_box(rec.x1, 0, rec.z0 + t, rec.x1 + depth, hh, rec.z0 + t + length, kind)
-				elif side == 1:
-					b = add_box(rec.x0 - depth, 0, rec.z0 + t, rec.x0, hh, rec.z0 + t + length, kind)
-				elif side == 2:
-					b = add_box(rec.x0 + t, 0, rec.z1, rec.x0 + t + length, hh, rec.z1 + depth, kind)
-				else:
-					b = add_box(rec.x0 + t, 0, rec.z0 - depth, rec.x0 + t + length, hh, rec.z0, kind)
-				if not big and h > 5.5 and _rnd() < 0.5:
-					add_box(b.x0, hh, b.z0, b.x1, hh + 1.2, b.z1, "red")
+	# on another face of every block, two crates up against the wall: vault, vault,
+	# then a jump into a wall climb up the last stretch
+	for rec in buildings:
+		if rec == null:
+			continue
+		var sides := ["n", "s", "w", "e"].filter(func(sd): return sd != rec.ramp)
+		_crate_steps(rec, sides[_rng.randi() % sides.size()])
+		for k in 1 + _rng.randi() % 2:   # loose crates along the streets, to vault
+			var sd: String = sides[_rng.randi() % sides.size()]
+			var big := _rnd() < 0.35
+			_street_crate(rec, sd, 2.2 if big else 1.2, 1.3 if big else 1.2, "dark" if big else "red")
 
-	# links between neighbouring roofs: catwalks and wall-run billboards
+	# links between neighbouring roofs: a sloped bridge down to a lower roof, a flat
+	# catwalk between roofs of the same height, and wall-run billboards
 	for j in 5:
 		for i in 5:
 			var a = buildings[j * 5 + i]
@@ -374,42 +387,7 @@ func generate() -> void:
 				var c = buildings[(j + dd.y) * 5 + i + dd.x]
 				if c == null:
 					continue
-				var along_x: bool = dd.x == 1
-				var o0: float = maxf(a.z0, c.z0) if along_x else maxf(a.x0, c.x0)
-				var o1: float = minf(a.z1, c.z1) if along_x else minf(a.x1, c.x1)
-				if o1 - o0 < 6.0:
-					continue
-				var g0: float = a.x1 if along_x else a.z1
-				var g1: float = c.x0 if along_x else c.z0
-				var used := NAN
-				if _rnd() < 0.5:
-					var m := o0 + 2.0 + _rnd() * (o1 - o0 - 4.0)
-					var ha := _height_at(a, a.x1 - 0.1, m) if along_x else _height_at(a, m, a.z1 - 0.1)
-					var hc := _height_at(c, c.x0 + 0.1, m) if along_x else _height_at(c, m, c.z0 + 0.1)
-					var y := minf(ha, hc)
-					if along_x:
-						add_box(g0, y - 0.3, m - 1.1, g1, y, m + 1.1, "red")
-					else:
-						add_box(m - 1.1, y - 0.3, g0, m + 1.1, y, g1, "red")
-					used = m
-				if _rnd() < 0.4:
-					var m := o0 + 0.8 if _rnd() < 0.5 else o1 - 0.8
-					if not is_nan(used) and absf(m - used) < 2.5:
-						m = o1 - 0.8 if m == o0 + 0.8 else o0 + 0.8
-					var ha := _height_at(a, a.x1 - 0.1, m) if along_x else _height_at(a, m, a.z1 - 0.1)
-					var hc := _height_at(c, c.x0 + 0.1, m) if along_x else _height_at(c, m, c.z0 + 0.1)
-					var y0 := maxf(2.4, minf(ha, hc) - 1.2)
-					var y1 := maxf(ha, hc) + 2.8
-					if along_x:
-						add_box(g0 - 1.5, y0, m - 0.18, g1 + 1.5, y1, m + 0.18, "red")
-					else:
-						add_box(m - 0.18, y0, g0 - 1.5, m + 0.18, y1, g1 + 1.5, "red")
-
-	# ramps from the street straight onto four outer roofs
-	_outer_ramp(buildings[1], "n")
-	_outer_ramp(buildings[4 * 5 + 3], "s")
-	_outer_ramp(buildings[3 * 5 + 0], "w")
-	_outer_ramp(buildings[1 * 5 + 4], "e")
+				_link(a, c, dd.x == 1)
 
 	# central plaza
 	add_box(-3, 0, -3, 3, 2.2, 3, "red")
@@ -425,8 +403,6 @@ func generate() -> void:
 		add_box(-1.5, 0, za, -1.2, 1.15, zb, "dark")
 		add_box(1.2, 0, za, 1.5, 1.15, zb, "dark")
 		add_box(-1.5, 1.15, za, 1.5, 1.45, zb, "dark")
-	for pc in [Vector2(-10, 10), Vector2(10, -10), Vector2(-10, -10), Vector2(10, 10)]:
-		add_box(pc.x - 0.4, 0, pc.y - 0.4, pc.x + 0.4, 3.2, pc.y + 0.4, "light")
 
 	# skyline ring that closes the map
 	for a in range(-70, 70, 10):
@@ -484,20 +460,161 @@ func _find_beacon_spots() -> void:
 				beacon_spots.append(Vector3(sx, top, sz))
 
 
-func _outer_ramp(rec: Dictionary, side: String) -> void:
-	var length := 8.0   # leaves a run-out before the skyline wall
-	var w := 3.2
-	var cx: float = (rec.x0 + rec.x1) / 2.0
-	var cz: float = (rec.z0 + rec.z1) / 2.0
+## Rooftop obstacles laid along the running lines: vault units spaced to chain,
+## the odd pipe to slide under, and a hut pushed into a corner.
+func _roof_course(rec: Dictionary) -> void:
+	for p in rec.parts:
+		var w: float = p[1] - p[0]
+		var d: float = p[3] - p[2]
+		var top: float = p[4]
+		var cx: float = (p[0] + p[1]) / 2.0
+		var cz: float = (p[2] + p[3]) / 2.0
+		var long_x := w >= d
+		var length := w if long_x else d
+		var n := 2 if length > 9.0 else 1
+		var side := 1.0 if _rnd() < 0.5 else -1.0
+		for k in n:   # a line of units across the long axis, 2.5 m off the middle
+			var t := (float(k + 1) / (n + 1) - 0.5) * length
+			var ux := cx + t if long_x else cx + side * 2.5
+			var uz := cz + side * 2.5 if long_x else cz + t
+			var uh := 0.9 + _rnd() * 0.25
+			if long_x:
+				add_box(ux - 0.5, top, uz - 0.9, ux + 0.5, top + uh, uz + 0.9, "light")
+			else:
+				add_box(ux - 0.9, top, uz - 0.5, ux + 0.9, top + uh, uz + 0.5, "light")
+		if _rnd() < 0.35:   # pipe across the short axis, to slide under
+			var m := (cx if long_x else cz) + (_rnd() - 0.5) * length * 0.5
+			if long_x:
+				add_box(m - 0.15, top + 1.15, p[2] + 0.2, m + 0.15, top + 1.45, p[3] - 0.2, "dark")
+			else:
+				add_box(p[0] + 0.2, top + 1.15, m - 0.15, p[1] - 0.2, top + 1.45, m + 0.15, "dark")
+		if w * d > 120.0 and _rnd() < 0.3:   # hut in a corner: a wall to run or climb
+			var hx: float = p[0] + 0.8 if _rnd() < 0.5 else p[1] - 4.4
+			var hz: float = p[2] + 0.8 if _rnd() < 0.5 else p[3] - 3.8
+			add_box(hx, top, hz, hx + 3.6, top + 2.6, hz + 3.0, "light")
+
+
+## Long ramp along one face of a block, from the street up to a landing level
+## with the roof: the runner steps sideways onto the roof there, or slides down
+## the ramp for speed.
+func _side_ramp(rec: Dictionary, side: String) -> void:
+	var w := 2.6
+	var m := 0.6       # keeps clear of the corners
+	var landing := 2.6
+	var up := 1 if _rnd() < 0.5 else -1
+	rec.ramp = side
+	if side == "n" or side == "s":
+		var x0: float = rec.x0 + m
+		var x1: float = rec.x1 - m
+		var zin: float = rec.z0 + 0.2 if side == "n" else rec.z1 - 0.2
+		var hi := _height_at(rec, x1 - 0.2 if up > 0 else x0 + 0.2, zin)
+		var z0: float = rec.z0 - w if side == "n" else rec.z1
+		if up > 0:
+			ramps.append(Ramp.new(x0, x1 - landing, z0, z0 + w, 0, hi, "x", up))
+			add_box(x1 - landing, 0, z0, x1, hi, z0 + w, "red")
+		else:
+			ramps.append(Ramp.new(x0 + landing, x1, z0, z0 + w, 0, hi, "x", up))
+			add_box(x0, 0, z0, x0 + landing, hi, z0 + w, "red")
+	else:
+		var z0: float = rec.z0 + m
+		var z1: float = rec.z1 - m
+		var xin: float = rec.x0 + 0.2 if side == "w" else rec.x1 - 0.2
+		var hi := _height_at(rec, xin, z1 - 0.2 if up > 0 else z0 + 0.2)
+		var x0: float = rec.x0 - w if side == "w" else rec.x1
+		if up > 0:
+			ramps.append(Ramp.new(x0, x0 + w, z0, z1 - landing, 0, hi, "z", up))
+			add_box(x0, 0, z1 - landing, x0 + w, hi, z1, "red")
+		else:
+			ramps.append(Ramp.new(x0, x0 + w, z0 + landing, z1, 0, hi, "z", up))
+			add_box(x0, 0, z0, x0 + w, hi, z0 + landing, "red")
+
+
+## Footprint (x0, z0, x1, z1) of something set against face `side`, `depth` out
+## into the street, `length` along the face starting `t` from the face's start.
+func _against(rec: Dictionary, side: String, t: float, length: float, depth: float) -> Vector4:
 	match side:
 		"n":
-			ramps.append(Ramp.new(cx - w / 2, cx + w / 2, rec.z0 - length, rec.z0, 0, _height_at(rec, cx, rec.z0 + 0.2), "z", 1))
+			return Vector4(rec.x0 + t, rec.z0 - depth, rec.x0 + t + length, rec.z0)
 		"s":
-			ramps.append(Ramp.new(cx - w / 2, cx + w / 2, rec.z1, rec.z1 + length, 0, _height_at(rec, cx, rec.z1 - 0.2), "z", -1))
+			return Vector4(rec.x0 + t, rec.z1, rec.x0 + t + length, rec.z1 + depth)
 		"w":
-			ramps.append(Ramp.new(rec.x0 - length, rec.x0, cz - w / 2, cz + w / 2, 0, _height_at(rec, rec.x0 + 0.2, cz), "x", 1))
-		"e":
-			ramps.append(Ramp.new(rec.x1, rec.x1 + length, cz - w / 2, cz + w / 2, 0, _height_at(rec, rec.x1 - 0.2, cz), "x", -1))
+			return Vector4(rec.x0 - depth, rec.z0 + t, rec.x0, rec.z0 + t + length)
+	return Vector4(rec.x1, rec.z0 + t, rec.x1 + depth, rec.z0 + t + length)
+
+
+func _face_len(rec: Dictionary, side: String) -> float:
+	return (rec.x1 - rec.x0) if side == "n" or side == "s" else (rec.z1 - rec.z0)
+
+
+## Two crates stepping up to a wall: 1.25 m out in the street, 2.5 m against it.
+func _crate_steps(rec: Dictionary, side: String) -> void:
+	var length := 2.4
+	var t := 1.5 + _rnd() * (_face_len(rec, side) - 3.0 - length)
+	var inner := _against(rec, side, t, length, 1.3)
+	var outer := _against(rec, side, t, length, 2.6)
+	add_box(inner.x, 0, inner.y, inner.z, 2.5, inner.w, "dark")
+	var n := {"n": Vector2i(0, -1), "s": Vector2i(0, 1), "w": Vector2i(-1, 0), "e": Vector2i(1, 0)}[side] as Vector2i
+	var mid := Vector3((outer.x + outer.z) / 2.0, 0, (outer.y + outer.w) / 2.0)
+	var edge := mid + Vector3(n.x, 0, n.y) * 1.3   # outer face of the low crate
+	var wall_pt := mid - Vector3(n.x, 0, n.y) * 1.5
+	crate_steps.append({"p": edge, "n": n, "top": _height_at(rec, wall_pt.x, wall_pt.z)})
+	match side:   # the outer crate is the part of `outer` beyond `inner`
+		"n":
+			add_box(outer.x, 0, outer.y, outer.z, 1.25, inner.y, "red")
+		"s":
+			add_box(outer.x, 0, inner.w, outer.z, 1.25, outer.w, "red")
+		"w":
+			add_box(outer.x, 0, outer.y, inner.x, 1.25, outer.w, "red")
+		_:
+			add_box(inner.z, 0, outer.y, outer.z, 1.25, outer.w, "red")
+
+
+func _street_crate(rec: Dictionary, side: String, length: float, hh: float, kind: String) -> void:
+	var t := 1.0 + _rnd() * (_face_len(rec, side) - 2.0 - length)
+	var f := _against(rec, side, t, length, 1.2)
+	add_box(f.x, 0, f.y, f.z, hh, f.w, kind)
+
+
+## What joins two neighbouring roofs across the street between them.
+func _link(a: Dictionary, c: Dictionary, along_x: bool) -> void:
+	var o0: float = maxf(a.z0, c.z0) if along_x else maxf(a.x0, c.x0)
+	var o1: float = minf(a.z1, c.z1) if along_x else minf(a.x1, c.x1)
+	if o1 - o0 < 6.0:
+		return
+	var g0: float = a.x1 if along_x else a.z1
+	var g1: float = c.x0 if along_x else c.z0
+	var used := NAN
+	var m := o0 + 2.5 + _rnd() * (o1 - o0 - 5.0)
+	var ha := _height_at(a, a.x1 - 0.1, m) if along_x else _height_at(a, m, a.z1 - 0.1)
+	var hc := _height_at(c, c.x0 + 0.1, m) if along_x else _height_at(c, m, c.z0 + 0.1)
+	if absf(ha - hc) >= 0.9 and _rnd() < 0.7:
+		# bridge sloping down to the lower roof, flush with both edges
+		var up := 1 if hc > ha else -1
+		var lo := minf(ha, hc)
+		var hi := maxf(ha, hc)
+		if along_x:
+			ramps.append(Ramp.new(g0, g1, m - 1.2, m + 1.2, lo, hi, "x", up, 0.3))
+		else:
+			ramps.append(Ramp.new(m - 1.2, m + 1.2, g0, g1, lo, hi, "z", up, 0.3))
+		used = m
+	elif absf(ha - hc) < 0.3 and _rnd() < 0.6:
+		if along_x:
+			add_box(g0, ha - 0.3, m - 1.1, g1, ha, m + 1.1, "red")
+		else:
+			add_box(m - 1.1, ha - 0.3, g0, m + 1.1, ha, g1, "red")
+		used = m
+	if _rnd() < 0.45:   # billboard over the street: run along it to cross
+		var b := o0 + 0.8 if _rnd() < 0.5 else o1 - 0.8
+		if not is_nan(used) and absf(b - used) < 3.0:
+			b = o1 - 0.8 if b == o0 + 0.8 else o0 + 0.8
+		var hb := _height_at(a, a.x1 - 0.1, b) if along_x else _height_at(a, b, a.z1 - 0.1)
+		var hd := _height_at(c, c.x0 + 0.1, b) if along_x else _height_at(c, b, c.z0 + 0.1)
+		var y0 := maxf(2.4, minf(hb, hd) - 1.2)
+		var y1 := maxf(hb, hd) + 2.8
+		if along_x:
+			add_box(g0 - 1.5, y0, b - 0.18, g1 + 1.5, y1, b + 0.18, "red")
+		else:
+			add_box(b - 0.18, y0, g0 - 1.5, b + 0.18, y1, g1 + 1.5, "red")
 
 
 # ------------------------------------------------------------------ collision
@@ -516,7 +633,7 @@ func build_collision() -> void:
 	for r in ramps:
 		var pts := PackedVector3Array()
 		for c in [Vector2(r.x0, r.z0), Vector2(r.x1, r.z0), Vector2(r.x1, r.z1), Vector2(r.x0, r.z1)]:
-			pts.append(Vector3(c.x, 0, c.y))
+			pts.append(Vector3(c.x, r.bottom_at(c.x, c.y), c.y))
 			var top := r.y_at(c.x, c.y)
 			if top > 0.01:
 				pts.append(Vector3(c.x, top, c.y))
@@ -557,7 +674,8 @@ func build_visuals() -> void:
 		_prism(buckets, "wall", "roof", d.x0, 0, d.z0, d.x1, d.z1, [d.h, d.h, d.h, d.h], d.tint, true)
 	for r in ramps:
 		var t := [r.y_at(r.x0, r.z0), r.y_at(r.x1, r.z0), r.y_at(r.x1, r.z1), r.y_at(r.x0, r.z1)]
-		_prism(buckets, "red", "red", r.x0, 0, r.z0, r.x1, r.z1, t, Color.WHITE, true)
+		var bot := [r.bottom_at(r.x0, r.z0), r.bottom_at(r.x1, r.z0), r.bottom_at(r.x1, r.z1), r.bottom_at(r.x0, r.z1)]
+		_prism(buckets, "red", "red", r.x0, 0, r.z0, r.x1, r.z1, t, Color.WHITE, true, bot)
 
 	for k in buckets:
 		var bk: Bucket = buckets[k]
@@ -600,13 +718,19 @@ func _quad(bk: Bucket, a: Vector3, b: Vector3, c: Vector3, d: Vector3, mode: int
 		bk.uv.append(_uv(vtx, mode, s))
 
 
-## Box whose top corners can sit at different heights (ramps). Corner order for t:
+## Box whose top corners can sit at different heights (ramps). Corner order for t
+## (and for bot, the bottom corners of a bridge slab; flat at y0 when empty):
 ## (x0,z0), (x1,z0), (x1,z1), (x0,z1).
-func _prism(buckets: Dictionary, side_k: String, top_k: String, x0: float, y0: float, z0: float, x1: float, z1: float, t: Array, col: Color, sides: bool) -> void:
+func _prism(buckets: Dictionary, side_k: String, top_k: String, x0: float, y0: float, z0: float, x1: float, z1: float, t: Array, col: Color, sides: bool, bot := []) -> void:
 	var ta: float = t[0]
 	var tb: float = t[1]
 	var tc: float = t[2]
 	var td: float = t[3]
+	var b := [y0, y0, y0, y0] if bot.is_empty() else bot
+	var ba: float = b[0]
+	var bb: float = b[1]
+	var bc: float = b[2]
+	var bd: float = b[3]
 	var bt: Bucket = buckets[top_k]
 	var bs: Bucket = buckets[side_k]
 	var st: float = SCALE[top_k]
@@ -614,10 +738,12 @@ func _prism(buckets: Dictionary, side_k: String, top_k: String, x0: float, y0: f
 	_quad(bt, Vector3(x0, ta, z0), Vector3(x0, td, z1), Vector3(x1, tc, z1), Vector3(x1, tb, z0), 0, st, col)
 	if not sides:
 		return
-	_quad(bs, Vector3(x1, y0, z0), Vector3(x1, tb, z0), Vector3(x1, tc, z1), Vector3(x1, y0, z1), 1, ss, col)
-	_quad(bs, Vector3(x0, y0, z1), Vector3(x0, td, z1), Vector3(x0, ta, z0), Vector3(x0, y0, z0), 1, ss, col)
-	_quad(bs, Vector3(x1, y0, z1), Vector3(x1, tc, z1), Vector3(x0, td, z1), Vector3(x0, y0, z1), 2, ss, col)
-	_quad(bs, Vector3(x0, y0, z0), Vector3(x0, ta, z0), Vector3(x1, tb, z0), Vector3(x1, y0, z0), 2, ss, col)
+	_quad(bs, Vector3(x1, bb, z0), Vector3(x1, tb, z0), Vector3(x1, tc, z1), Vector3(x1, bc, z1), 1, ss, col)
+	_quad(bs, Vector3(x0, bd, z1), Vector3(x0, td, z1), Vector3(x0, ta, z0), Vector3(x0, ba, z0), 1, ss, col)
+	_quad(bs, Vector3(x1, bc, z1), Vector3(x1, tc, z1), Vector3(x0, td, z1), Vector3(x0, bd, z1), 2, ss, col)
+	_quad(bs, Vector3(x0, ba, z0), Vector3(x0, ta, z0), Vector3(x1, tb, z0), Vector3(x1, bb, z0), 2, ss, col)
+	if not bot.is_empty():   # underside, seen from the street below a bridge
+		_quad(bs, Vector3(x0, ba, z0), Vector3(x1, bb, z0), Vector3(x1, bc, z1), Vector3(x0, bd, z1), 0, ss, col)
 	if y0 > 0.01:   # underside of floating pieces (catwalks, pipes, billboards)
 		_quad(bs, Vector3(x0, y0, z0), Vector3(x1, y0, z0), Vector3(x1, y0, z1), Vector3(x0, y0, z1), 0, ss, col)
 

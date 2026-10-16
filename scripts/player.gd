@@ -531,7 +531,7 @@ func _air_move(dt: float, has: bool, wish: Vector3, hs: float) -> void:
 func _slide_move(dt: float, has: bool, wish: Vector3) -> void:
 	st_t += dt
 	var friction := 2.0
-	var r := world.ramp_at(position.x, position.z) if grounded else null
+	var r := world.ramp_at(position.x, position.z, position.y) if grounded else null
 	if r != null:   # gravity pulls along the slope
 		var gr := r.grade()
 		var acc := GRAV * gr / sqrt(1.0 + gr * gr) * 0.9

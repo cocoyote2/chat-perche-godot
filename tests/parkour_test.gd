@@ -44,7 +44,7 @@ func _run() -> void:
 
 	# 1b. Space again near the top: grab the ledge and pull up onto the roof
 	p.set_pos(Vector3(face + 4.5, 0, z), PI / 2)
-	log = await _sim([{"ax": Vector2(0, 1), "t": 0.35}, {"ax": Vector2(0, 1), "jump": true, "t": 0.2}, {"ax": Vector2(0, 1), "jump": true, "t": 1.0}])
+	log = await _sim([{"ax": Vector2(0, 1), "t": 0.35}, {"ax": Vector2(0, 1), "jump": true, "t": 0.2}, {"ax": Vector2(0, 1), "t": 0.15}, {"ax": Vector2(0, 1), "jump": true, "t": 1.0}])
 	_check("Espace au rebord : escalade d'un mur de %.1f m" % top, p.position.y >= top - 0.05 and "mantle" in log, log)
 
 	# 2. slide: starts at the running speed, no boost
@@ -65,7 +65,7 @@ func _run() -> void:
 	var tall := _tallest_building()
 	var tz: float = (tall.z0 + tall.z1) / 2.0
 	p.set_pos(Vector3(tall.x1 - 1.0, tall.h, tz), -PI / 2)   # facing +X, off the edge
-	log = await _sim([{"ax": Vector2(0, 1), "t": 0.6}, {"ax": Vector2(0, 0), "t": 0.75, "slide_at": 0.55}, {"ax": Vector2(0, 0), "t": 0.6}])
+	log = await _sim([{"ax": Vector2(0, 1), "t": 0.6}, {"ax": Vector2(0, 0), "slide": true, "t": 0.9}, {"ax": Vector2(0, 0), "t": 0.6}])
 	_check("roulade après %.0f m de chute" % tall.h, "roll" in log, log)
 	p.set_pos(Vector3(tall.x1 - 1.0, tall.h, tz), -PI / 2)
 	log = await _sim([{"ax": Vector2(0, 1), "t": 0.6}, {"ax": Vector2(0, 0), "t": 1.4}])
@@ -78,8 +78,14 @@ func _run() -> void:
 
 	# 6. slide down a ramp: gravity adds speed
 	var r: World.Ramp = world.ramps[0]
-	var mid_x := (r.x0 + r.x1) / 2.0
-	p.set_pos(Vector3(mid_x, r.hi + 0.05, r.z1 + 0.6), 0.0)   # on the roof, facing -Z down the ramp
+	var dh := r.downhill()
+	var top_pt := Vector3((r.x0 + r.x1) / 2.0, 0, (r.z0 + r.z1) / 2.0)
+	if r.ax == "x":
+		top_pt.x = (r.x1 if r.up > 0 else r.x0) + dh.x * 1.0   # 1 m in from the high end
+	else:
+		top_pt.z = (r.z1 if r.up > 0 else r.z0) + dh.z * 1.0
+	top_pt.y = r.y_at(top_pt.x, top_pt.z) + 0.05
+	p.set_pos(top_pt, atan2(-dh.x, -dh.z))   # facing down the slope
 	log = await _sim([{"ax": Vector2(0, 1), "t": 0.45}, {"ax": Vector2(0, 1), "slide": true, "slide_press": true, "t": 1.0}])
 	_check("glissade sur rampe (pointe à %.1f m/s)" % max_v, max_v > 11.0 and "slide" in log, log)
 
@@ -143,6 +149,78 @@ func _run() -> void:
 	p.free_sprint = false
 	_check("Second souffle : sprint gratuit (%.1f m/s, endurance %.0f %%)" % [p.hspeed(), p.stamina * 100.0], p.hspeed() > 10.0 and p.stamina >= 0.5, log)
 
+	# ---- the map: getting onto the roofs, and chaining for speed
+
+	# 14. a side ramp takes a runner from the street onto the roof
+	var sr: World.Ramp = null
+	for q in world.ramps:
+		if q.thick < 0.0 and q.hi > 4.0 and maxf(q.x1 - q.x0, q.z1 - q.z0) > 10.0:
+			sr = q
+			break
+	var sdn := sr.downhill()
+	var along := sr.x1 - sr.x0 if sr.ax == "x" else sr.z1 - sr.z0
+	var lowp := Vector3((sr.x0 + sr.x1) / 2.0, 0, (sr.z0 + sr.z1) / 2.0)
+	if sr.ax == "x":
+		lowp.x = (sr.x0 if sr.up > 0 else sr.x1) + sdn.x * 1.5
+	else:
+		lowp.z = (sr.z0 if sr.up > 0 else sr.z1) + sdn.z * 1.5
+	var ryaw := atan2(sdn.x, sdn.z)   # facing uphill
+	var rright := Vector3(cos(ryaw), 0, -sin(ryaw))
+	var side_n := Vector3(0, 0, 1) if sr.ax == "x" else Vector3(1, 0, 0)
+	var top_end := lowp - sdn * (along + 2.8)   # middle of the flat landing at the top
+	var roof_side := 1.0 if world.support_top(top_end.x + side_n.x * 2.0, sr.hi + 0.5, top_end.z + side_n.z * 2.0, 1.0) >= sr.hi - 0.05 else -1.0
+	var sgn := signf(rright.dot(side_n * roof_side))
+	p.set_pos(lowp, ryaw)
+	log = await _sim([{"ax": Vector2(0, 1), "t": (along + 2.8) / 8.0 + 0.15}, {"ax": Vector2(0, 0), "t": 0.2}, {"ax": Vector2(sgn, 0), "t": 0.7}])
+	_check("rampe d'accès : de la rue au toit de %.1f m (y=%.2f)" % [sr.hi, p.position.y], p.position.y >= sr.hi - 0.1 and world.ramp_at(p.position.x, p.position.z, p.position.y) == null, log)
+
+	# 15. crate steps: vault, vault, jump into a wall climb, Space at the top
+	var climbed := false
+	var tried := 0
+	for cs in world.crate_steps:
+		var n: Vector2i = cs.n
+		var start: Vector3 = cs.p + Vector3(n.x, 0, n.y) * 2.5
+		if cs.top > 7.0 or not world.is_free(start.x, 0.0, start.z, World.HS):
+			continue
+		tried += 1
+		p.set_pos(start, atan2(n.x, n.y))
+		log = await _sim([{"ax": Vector2(0, 1), "t": 1.0}, {"ax": Vector2(0, 1), "jump": true, "t": 0.25}, {"ax": Vector2(0, 1), "t": 0.15}, {"ax": Vector2(0, 1), "jump": true, "t": 1.2}])
+		if p.position.y >= float(cs.top) - 0.05:
+			climbed = true
+			_check("escalier de caisses : de la rue au toit de %.1f m (%d essai)" % [cs.top, tried], true, log)
+			break
+		if tried >= 3:
+			break
+	if not climbed:
+		_check("escalier de caisses : de la rue au toit", false, log)
+
+	# 16. a bridge slopes down to the next roof: slide it for speed
+	var br: World.Ramp = null
+	for q in world.ramps:
+		if q.thick > 0.0:
+			br = q
+			break
+	var bdn := br.downhill()
+	var bstart := Vector3((br.x0 + br.x1) / 2.0, br.hi, (br.z0 + br.z1) / 2.0)
+	if br.ax == "x":
+		bstart.x = (br.x1 if br.up > 0 else br.x0) - bdn.x * 2.0
+	else:
+		bstart.z = (br.z1 if br.up > 0 else br.z0) - bdn.z * 2.0
+	p.set_pos(bstart, atan2(-bdn.x, -bdn.z))
+	log = await _sim([{"ax": Vector2(0, 1), "t": 0.35}, {"ax": Vector2(0, 1), "slide": true, "slide_press": true, "t": 1.0}])
+	_check("toboggan de %.1f à %.1f m : pointe à %.1f m/s, arrivée sur le toit (y=%.2f)" % [br.hi, br.lo, max_v, p.position.y],
+		max_v > 9.5 and p.position.y > br.lo - 0.3, log)
+
+	# 17. jump across a street onto a roof 1 to 1.5 m higher: it ends in a vault
+	var hop := _find_hop()
+	if hop.is_empty():
+		_check("saut vers un toit plus haut : aucune paire trouvée", false, "")
+	else:
+		p.set_pos(hop.start, hop.yaw)
+		p.velocity = Vector3(-sin(hop.yaw), 0, -cos(hop.yaw)) * 8.0
+		log = await _sim([{"ax": Vector2(0, 1), "t": 0.1}, {"ax": Vector2(0, 1), "jump": true, "t": 1.2}])
+		_check("saut par-dessus la rue vers un toit %.1f m plus haut (y=%.2f)" % [hop.up, p.position.y], p.position.y >= float(hop.top) - 0.05, log)
+
 	print("\n%s" % ("TOUS LES TESTS PASSENT" if failures == 0 else "%d ÉCHEC(S)" % failures))
 	quit(1 if failures > 0 else 0)
 
@@ -194,6 +272,41 @@ func _clear_z(face: float, z0: float, z1: float) -> float:
 		if world.box_hit(face + 0.05, 0.05, cand - 0.6, face + 5.0, 1.8, cand + 0.6) == null:
 			return cand
 	return z
+
+
+## Two neighbouring roofs with the far one 0.9 to 1.6 m higher and a clear street
+## in between. Returns {start, yaw, top, up} or {}.
+func _find_hop() -> Dictionary:
+	for j in 5:
+		for i in 4:
+			var a = world.buildings[j * 5 + i]
+			var c = world.buildings[j * 5 + i + 1]
+			if a == null or c == null or a.parts.size() > 1 or c.parts.size() > 1:
+				continue
+			for pair in [[a, c, 1.0], [c, a, -1.0]]:
+				var lo: Dictionary = pair[0]
+				var hi: Dictionary = pair[1]
+				var dirx: float = pair[2]
+				var dh: float = hi.h - lo.h
+				if dh < 0.9 or dh > 1.6:
+					continue
+				var edge: float = lo.x1 if dirx > 0 else lo.x0
+				var far_edge: float = hi.x0 if dirx > 0 else hi.x1
+				for k in 7:
+					var z: float = lerpf(maxf(lo.z0, hi.z0) + 2.0, minf(lo.z1, hi.z1) - 2.0, k / 6.0)
+					# clear above our roof and over the street, then above the far roof
+					var ax0 := minf(edge - dirx * 2.0, far_edge - dirx * 0.01)
+					var ax1 := maxf(edge - dirx * 2.0, far_edge - dirx * 0.01)
+					var bx0 := minf(far_edge, far_edge + dirx * 3.0)
+					var bx1 := maxf(far_edge, far_edge + dirx * 3.0)
+					if world.box_hit(ax0, lo.h + 0.05, z - 0.6, ax1, hi.h + 2.2, z + 0.6) != null:
+						continue
+					if world.box_hit(bx0, hi.h + 0.05, z - 0.6, bx1, hi.h + 2.2, z + 0.6) != null:
+						continue
+					if world.ramp_at(edge + dirx * 2.0, z) != null:
+						continue
+					return {"start": Vector3(edge - dirx * 1.2, lo.h, z), "yaw": -PI / 2 if dirx > 0 else PI / 2, "top": hi.h, "up": dh}
+	return {}
 
 
 func _tallest_building() -> Dictionary:
