@@ -1,0 +1,7 @@
+.git
+.godot
+export
+tests
+*.tpz
+Dockerfile
+.dockerignore
