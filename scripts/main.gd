@@ -122,11 +122,11 @@ func _setup_environment() -> void:
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color("#c9d3dc")
-	env.ambient_light_energy = 0.6
+	env.ambient_light_energy = 0.5
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.ssao_enabled = true
 	env.fog_enabled = true
-	env.fog_light_color = Color("#cfe1f1")
+	env.fog_light_color = Color("#b4c3d0")
 	env.fog_density = 0.0025
 	env.fog_sky_affect = 0.0
 	var we := WorldEnvironment.new()
@@ -135,7 +135,7 @@ func _setup_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation = Vector3(deg_to_rad(-52), deg_to_rad(-35), 0)
 	sun.light_color = Color("#fff0d8")
-	sun.light_energy = 1.5
+	sun.light_energy = 1.25
 	sun.shadow_enabled = true
 	sun.directional_shadow_max_distance = 90.0
 	add_child(sun)

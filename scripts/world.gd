@@ -293,7 +293,7 @@ func generate() -> void:
 	_rng.seed = 20261016
 	var lots := [-40.0, -20.0, 0.0, 20.0, 40.0]
 	var ht := [[4, 6, 8, 6, 4], [6, 9, 11, 9, 6], [8, 11, 0, 11, 8], [6, 9, 11, 9, 6], [4, 6, 8, 6, 4]]
-	var tints := [Color("#ffffff"), Color("#f0f3f7"), Color("#e4ecf5"), Color("#f7eee6"), Color("#ecf1e9"), Color("#f4f4f4")]
+	var tints := [Color("#e8dccb"), Color("#d3dbe3"), Color("#e6cfbd"), Color("#d4dcc9"), Color("#ddd6cd"), Color("#d9d9d9")]
 	add_box(-300, -1, -300, 300, 0, 300, "ground")
 
 	for j in 5:
@@ -621,22 +621,22 @@ func _make_texture(kind: String) -> ImageTexture:
 	var img := Image.create_empty(size, size, false, Image.FORMAT_RGBA8)
 	match kind:
 		"wall":   # 4 m tile, 64 px per metre, floor at the bottom of the image
-			img.fill(Color("#eceff2"))
+			img.fill(Color("#c6c4bf"))
 			for k in 2:
 				var x := int((k * 2 + 0.35) * 64)
 				var w := int(1.3 * 64)
 				var y := size - int(3.3 * 64)
 				var h := int(2.4 * 64)
-				img.fill_rect(Rect2i(x - 3, y - 3, w + 6, h + 6), Color("#c3cad2"))
+				img.fill_rect(Rect2i(x - 3, y - 3, w + 6, h + 6), Color("#9da1a5"))
 				for row in h:
 					img.fill_rect(Rect2i(x, y + row, w, 1), Color("#a8c6de").lerp(Color("#6d8fb0"), float(row) / h))
-				img.fill_rect(Rect2i(x + 6, y + 6, int(w * 0.3), h - 12), Color("#c4d8e8"))
-			img.fill_rect(Rect2i(0, size - 16, size, 16), Color("#d5dae0"))
+				img.fill_rect(Rect2i(x + 6, y + 6, int(w * 0.3), h - 12), Color("#b4c8d8"))
+			img.fill_rect(Rect2i(0, size - 16, size, 16), Color("#acaca8"))
 		"roof":
-			img.fill(Color("#d4d9df"))
+			img.fill(Color("#94979a"))
 			_speckle(img, 900, 0.08)
-			_grid_lines(img, 64, Color("#c6ccd2"), 2)
-			_grid_lines(img, 256, Color("#b3b9c0"), 4)
+			_grid_lines(img, 64, Color("#888b8e"), 2)
+			_grid_lines(img, 256, Color("#7b7e82"), 4)
 		"ground":
 			img.fill(Color("#5c6169"))
 			_speckle(img, 2500, 0.25)
@@ -649,8 +649,8 @@ func _make_texture(kind: String) -> ImageTexture:
 			img.fill(Color("#3b414a"))
 			_grid_lines(img, 32, Color("#454b54"), 2)
 		_:
-			img.fill(Color("#f1f1ec"))
+			img.fill(Color("#bbb8b0"))
 			_speckle(img, 200, 0.06)
-			_grid_lines(img, 64, Color("#dedfda"), 2)
+			_grid_lines(img, 64, Color("#aaa79f"), 2)
 	img.generate_mipmaps()
 	return ImageTexture.create_from_image(img)
