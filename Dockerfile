@@ -5,7 +5,7 @@ FROM debian:bookworm-slim
 ARG GODOT_VERSION=4.7.2
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ca-certificates wget unzip libfontconfig1 \
+	&& apt-get install -y --no-install-recommends ca-certificates wget unzip libfontconfig1 tini \
 	&& wget -q https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip -O /tmp/godot.zip \
 	&& unzip -q /tmp/godot.zip -d /tmp \
 	&& mv /tmp/Godot_v${GODOT_VERSION}-stable_linux.x86_64 /usr/local/bin/godot \
@@ -19,4 +19,6 @@ COPY . .
 RUN godot --headless --path . --import
 
 EXPOSE 7777/udp
+# tini as PID 1 forwards SIGTERM, so `docker stop` and redeploys are instant
+ENTRYPOINT ["tini", "--"]
 CMD ["godot", "--headless", "--path", "/game", "res://scenes/main.tscn", "--", "--server"]
