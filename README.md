@@ -17,6 +17,20 @@ Dans le menu :
 
 Une fois au moins deux joueurs connectés, n'importe qui appuie sur **Entrée** pour lancer la manche.
 
+## Exporter le jeu
+
+Pour générer des exécutables autonomes (sans Godot à installer) :
+
+```bash
+./export.sh            # Linux et Windows
+./export.sh linux      # export/linux/ChatPerche.x86_64
+./export.sh windows    # export/windows/ChatPerche.exe
+```
+
+Il faut d'abord installer les modèles d'export de la même version de Godot : **Éditeur → Gérer les modèles d'exportation → Télécharger et installer**. Pour utiliser un autre Godot que celui du PATH : `GODOT=/chemin/vers/godot ./export.sh`.
+
+Tous les joueurs doivent avoir la même version du jeu : le parkour est simulé chez chacun.
+
 ## Jouer en ligne avec des amis
 
 L'hôte doit être joignable sur le **port UDP 7777**. Deux options :
