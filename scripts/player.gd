@@ -373,15 +373,16 @@ func step(dt: float) -> void:
 			var reach := maxf(hs, recent)
 			if grounded and f > 0.0 and reach > 2.5:
 				var l := world.find_ledge(position, h, fn, 0.25, 1.4, 0.3 + reach * 0.05)
-				if not l.is_empty():
+				if not l.is_empty() and not world.ramp_leads_to(position, l):
 					_start_mantle(l, "vault", f)
 					return
 			elif not grounded and (f > 0.0 or (velocity.y < 0.0 and st == "move")):
 				var l := world.find_ledge(position, h, fn, 0.3, 2.4, 0.5)
 				if not l.is_empty():
 					var rel: float = l.top - position.y
-					# low ledges are vaulted on the way, but not at the end of a wall climb
-					if rel <= 1.45 and f > 0.0 and not climb_used:
+					# low ledges are vaulted on the way, but not at the end of a wall climb,
+					# nor where the ramp we are on simply carries on to it
+					if rel <= 1.45 and f > 0.0 and not climb_used and not world.ramp_leads_to(position, l):
 						_start_mantle(l, "vault", f)
 						return
 					# Space grabs the ledge and pulls straight up; without it, no grab

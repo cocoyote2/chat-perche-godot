@@ -172,7 +172,24 @@ func _run() -> void:
 	var sgn := signf(rright.dot(side_n * roof_side))
 	p.set_pos(lowp, ryaw)
 	log = await _sim([{"ax": Vector2(0, 1), "t": (along + 2.8) / 8.0 + 0.15}, {"ax": Vector2(0, 0), "t": 0.2}, {"ax": Vector2(sgn, 0), "t": 0.7}])
-	_check("rampe d'accès : de la rue au toit de %.1f m (y=%.2f)" % [sr.hi, p.position.y], p.position.y >= sr.hi - 0.1 and world.ramp_at(p.position.x, p.position.z, p.position.y) == null, log)
+	_check("rampe d'accès : de la rue au toit de %.1f m en marchant, sans franchissement (y=%.2f)" % [sr.hi, p.position.y],
+		p.position.y >= sr.hi - 0.1 and world.ramp_at(p.position.x, p.position.z, p.position.y) == null and not "mantle" in log, log)
+
+	# 14b. from the street, jump at the side of that ramp and get onto it: a vault
+	# where it is low, a grab with Space higher up
+	var street_side := -roof_side
+	for ylevel in [2.2, 3.2]:
+		var gp: Vector3 = lowp - sdn * (1.5 + along * float(ylevel) / sr.hi)   # where the slope is that high
+		var gstart: Vector3 = gp + side_n * street_side * (1.3 + 2.0)   # 2 m out from the ramp's street side
+		p.set_pos(gstart, atan2(side_n.x * street_side, side_n.z * street_side))   # facing the ramp
+		var steps := [{"ax": Vector2(0, 1), "t": 0.25}, {"ax": Vector2(0, 1), "jump": true, "t": 0.15}]
+		if ylevel > 3.0:
+			steps.append({"ax": Vector2(0, 1), "t": 0.1})
+			steps.append({"ax": Vector2(0, 1), "jump": true, "t": 0.15})
+		steps.append({"ax": Vector2(0, 0), "t": 0.6})
+		log = await _sim(steps)
+		var on_ramp := world.ramp_at(p.position.x, p.position.z, p.position.y) == sr
+		_check("côté d'une rampe à %.1f m : %s puis sur la rampe" % [ylevel, "franchissement" if ylevel < 3.0 else "Espace pour se hisser"], "mantle" in log and on_ramp, log)
 
 	# 15. crate steps: vault, vault, jump into a wall climb, Space at the top
 	var climbed := false
@@ -220,6 +237,24 @@ func _run() -> void:
 		p.velocity = Vector3(-sin(hop.yaw), 0, -cos(hop.yaw)) * 8.0
 		log = await _sim([{"ax": Vector2(0, 1), "t": 0.1}, {"ax": Vector2(0, 1), "jump": true, "t": 1.2}])
 		_check("saut par-dessus la rue vers un toit %.1f m plus haut (y=%.2f)" % [hop.up, p.position.y], p.position.y >= float(hop.top) - 0.05, log)
+
+	# 18. every bridge can be walked up from its low end
+	var blocked := []
+	var bridges := 0
+	for q: World.Ramp in world.ramps:
+		if q.thick <= 0.0:
+			continue
+		bridges += 1
+		var qdn := q.downhill()
+		var qlen := (q.x1 - q.x0) if q.ax == "x" else (q.z1 - q.z0)
+		var qs := Vector3((q.x0 + q.x1) / 2.0, q.lo + 0.02, (q.z0 + q.z1) / 2.0) + qdn * (qlen / 2.0 + 1.2)
+		p.set_pos(qs, atan2(qdn.x, qdn.z))
+		var qlog := await _sim([{"ax": Vector2(0, 1), "t": qlen / 8.0 + 0.6}])
+		if max_y < q.hi - 0.15:
+			blocked.append("%.1f→%.1f m en %s" % [q.lo, q.hi, qs])
+		elif "mantle" in qlog:
+			blocked.append("franchissement en haut de %.1f→%.1f m" % [q.lo, q.hi])
+	_check("les %d toboggans se montent en marchant%s" % [bridges, "" if blocked.is_empty() else " (%s)" % ", ".join(blocked)], blocked.is_empty(), "")
 
 	print("\n%s" % ("TOUS LES TESTS PASSENT" if failures == 0 else "%d ÉCHEC(S)" % failures))
 	quit(1 if failures > 0 else 0)

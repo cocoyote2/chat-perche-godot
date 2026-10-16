@@ -93,6 +93,7 @@ var beacon_spots: Array[Vector3] = []   # where the server may place a beacon
 var crate_steps: Array = []    # {p: street point in front, n: normal out of the wall, top: roof}
 var hunter_spawn := Vector3(0, 2.2, 0)
 
+var _keep_clear: Array[Rect2] = []   # roof areas (x, z) where bridges and ramps land
 var _grid := {}
 var _stamp := 0
 var _q: Array[Box] = []
@@ -217,37 +218,74 @@ func wall_probe(p: Vector3, n: Vector2i, dist: float, ylo: float, yhi: float) ->
 
 
 ## A ledge in front of the player whose top lies between p.y + lo and p.y + hi, with
-## room to crouch on top. Returns {} or {top, tx, tz, n, face}.
+## room to crouch on top. Box tops and ramp edges both count. Returns {} or
+## {top, tx, tz, n, face}.
 func find_ledge(p: Vector3, cur_h: float, n: Vector2i, lo: float, hi: float, dist: float) -> Dictionary:
-	if wall_probe(p, n, dist, lo - 0.6, hi) == null:
-		return {}
 	var r := _slab(p, n, dist)
 	var top := -INF
 	var face := 0.0
-	for c in query(r.x, r.y, r.z, r.w):
-		if not (r.x < c.x1 and r.z > c.x0 and r.y < c.z1 and r.w > c.z0):
+	if wall_probe(p, n, dist, lo - 0.6, hi) != null:
+		for c in query(r.x, r.y, r.z, r.w):
+			if not (r.x < c.x1 and r.z > c.x0 and r.y < c.z1 and r.w > c.z0):
+				continue
+			if c.y1 < p.y + lo or c.y1 > p.y + hi or c.y1 - c.y0 < 0.25:
+				continue
+			if c.y1 > top:
+				top = c.y1
+				face = _face_of(n, c.x0, c.x1, c.z0, c.z1)
+	# the edge of a ramp ahead: its surface where the player would pull up to
+	for rp in ramps:
+		if not (r.x < rp.x1 and r.z > rp.x0 and r.y < rp.z1 and r.w > rp.z0):
 			continue
-		if c.y1 < p.y + lo or c.y1 > p.y + hi or c.y1 - c.y0 < 0.25:
+		var f := _face_of(n, rp.x0, rp.x1, rp.z0, rp.z1)
+		var ahead := (f - p.x) * -n.x if n.x != 0 else (f - p.z) * -n.y
+		if ahead < R - 0.05:   # that edge is beside or behind us: we are on this ramp
 			continue
-		if c.y1 > top:
-			top = c.y1
-			if n.x > 0:
-				face = c.x1
-			elif n.x < 0:
-				face = c.x0
-			elif n.y > 0:
-				face = c.z1
-			else:
-				face = c.z0
+		var rx := f - n.x * (R + 0.3) if n.x != 0 else p.x
+		var rz := f - n.y * (R + 0.3) if n.y != 0 else p.z
+		if not rp.contains(rx, rz):
+			continue
+		# an edge level with our feet (the foot of a ramp) is walked onto, not vaulted
+		var ex := f if n.x != 0 else p.x
+		var ez := f if n.y != 0 else p.z
+		if absf(rp.y_at(ex, ez) - p.y) < 0.2:
+			continue
+		var ry := rp.y_at(rx, rz)
+		if ry < p.y + lo or ry > p.y + hi or ry - rp.bottom_at(rx, rz) < 0.25:
+			continue
+		if ry > top:
+			top = ry
+			face = f
 	if top == -INF:
 		return {}
 	var tx := face - n.x * (R + 0.3) if n.x != 0 else p.x
 	var tz := face - n.y * (R + 0.3) if n.y != 0 else p.z
+	var tr := ramp_at(tx, tz, top)
+	if tr != null:   # pulling up onto a slope: land on its surface there
+		top = tr.y_at(tx, tz)
 	if not is_free(tx, top, tz, HL):
 		return {}
 	if box_hit(p.x - R, p.y + cur_h, p.z - R, p.x + R, top + HL, p.z + R) != null:
 		return {}
 	return {"top": top, "tx": tx, "tz": tz, "n": n, "face": face}
+
+
+## The side of a rectangle facing a player whose wall normal is n.
+static func _face_of(n: Vector2i, x0: float, x1: float, z0: float, z1: float) -> float:
+	if n.x > 0:
+		return x1
+	if n.x < 0:
+		return x0
+	if n.y > 0:
+		return z1
+	return z0
+
+
+## True when the ramp under p carries on, level, onto that ledge: walking up a
+## ramp onto a roof or a landing is a step, not something to vault.
+func ramp_leads_to(p: Vector3, ledge: Dictionary) -> bool:
+	var r := ramp_at(p.x, p.z, p.y)
+	return r != null and absf(r.y_at(float(ledge.tx), float(ledge.tz)) - float(ledge.top)) < 0.2
 
 
 static func wall_key(n: Vector2i, b: Box) -> String:
@@ -339,12 +377,11 @@ func generate() -> void:
 			for p in rec.parts:
 				add_box(p[0], 0, p[2], p[1], p[4], p[3], "bld", tint)
 			buildings.append(rec)
-			_roof_course(rec)
 
-	# street access: a long ramp along an outer wall of every outer block, and
-	# ramps from the plaza up onto the four blocks around it
+	# street access: a long ramp along an outer wall of the corner and mid-side
+	# blocks, and two ramps from the plaza up onto the blocks around it
 	for rec in buildings:
-		if rec == null:
+		if rec == null or (rec.i + rec.j) % 2 == 1:
 			continue
 		var outer := []
 		if rec.j == 0:
@@ -359,8 +396,6 @@ func generate() -> void:
 			_side_ramp(rec, outer[_rng.randi() % outer.size()])
 	_side_ramp(buildings[1 * 5 + 2], "s")
 	_side_ramp(buildings[3 * 5 + 2], "n")
-	_side_ramp(buildings[2 * 5 + 1], "e")
-	_side_ramp(buildings[2 * 5 + 3], "w")
 
 	# on another face of every block, two crates up against the wall: vault, vault,
 	# then a jump into a wall climb up the last stretch
@@ -374,8 +409,8 @@ func generate() -> void:
 			var big := _rnd() < 0.35
 			_street_crate(rec, sd, 2.2 if big else 1.2, 1.3 if big else 1.2, "dark" if big else "red")
 
-	# links between neighbouring roofs: a sloped bridge down to a lower roof, a flat
-	# catwalk between roofs of the same height, and wall-run billboards
+	# links between neighbouring roofs: now and then a sloped bridge down to the
+	# lower roof, and wall-run billboards
 	for j in 5:
 		for i in 5:
 			var a = buildings[j * 5 + i]
@@ -388,6 +423,11 @@ func generate() -> void:
 				if c == null:
 					continue
 				_link(a, c, dd.x == 1)
+
+	# rooftop obstacles last, kept off the lanes where bridges and ramps arrive
+	for rec in buildings:
+		if rec != null:
+			_roof_course(rec)
 
 	# central plaza
 	add_box(-3, 0, -3, 3, 2.2, 3, "red")
@@ -478,20 +518,39 @@ func _roof_course(rec: Dictionary) -> void:
 			var ux := cx + t if long_x else cx + side * 2.5
 			var uz := cz + side * 2.5 if long_x else cz + t
 			var uh := 0.9 + _rnd() * 0.25
-			if long_x:
-				add_box(ux - 0.5, top, uz - 0.9, ux + 0.5, top + uh, uz + 0.9, "light")
-			else:
-				add_box(ux - 0.9, top, uz - 0.5, ux + 0.9, top + uh, uz + 0.5, "light")
+			var hw := Vector2(0.5, 0.9) if long_x else Vector2(0.9, 0.5)
+			_roof_box(p, ux - hw.x, uz - hw.y, ux + hw.x, uz + hw.y, top, top + uh, "light")
 		if _rnd() < 0.35:   # pipe across the short axis, to slide under
 			var m := (cx if long_x else cz) + (_rnd() - 0.5) * length * 0.5
 			if long_x:
-				add_box(m - 0.15, top + 1.15, p[2] + 0.2, m + 0.15, top + 1.45, p[3] - 0.2, "dark")
+				_roof_box(p, m - 0.15, p[2] + 0.2, m + 0.15, p[3] - 0.2, top + 1.15, top + 1.45, "dark", false)
 			else:
-				add_box(p[0] + 0.2, top + 1.15, m - 0.15, p[1] - 0.2, top + 1.45, m + 0.15, "dark")
+				_roof_box(p, p[0] + 0.2, m - 0.15, p[1] - 0.2, m + 0.15, top + 1.15, top + 1.45, "dark", false)
 		if w * d > 120.0 and _rnd() < 0.3:   # hut in a corner: a wall to run or climb
 			var hx: float = p[0] + 0.8 if _rnd() < 0.5 else p[1] - 4.4
 			var hz: float = p[2] + 0.8 if _rnd() < 0.5 else p[3] - 3.8
-			add_box(hx, top, hz, hx + 3.6, top + 2.6, hz + 3.0, "light")
+			_roof_box(p, hx, hz, hx + 3.6, hz + 3.0, top, top + 2.6, "light")
+
+
+## Adds a rooftop box unless it would stick out over the edge or sit on a lane
+## kept clear for a bridge or a ramp landing.
+func _roof_box(p: Array, x0: float, z0: float, x1: float, z1: float, y0: float, y1: float, kind: String, inside := true) -> void:
+	if inside and (x0 < p[0] + 0.8 or x1 > p[1] - 0.8 or z0 < p[2] + 0.8 or z1 > p[3] - 0.8):
+		return
+	var r := Rect2(x0, z0, x1 - x0, z1 - z0)
+	for lane in _keep_clear:
+		if lane.intersects(r):
+			return
+	add_box(x0, y0, z0, x1, y1, z1, kind)
+
+
+## Keeps a 4 m deep, 3.4 m wide lane clear on the roof on each side of a link
+## spanning the street from g0 to g1 at m.
+func _clear_lane(along_x: bool, g0: float, g1: float, m: float) -> void:
+	if along_x:
+		_keep_clear.append(Rect2(g0 - 4.0, m - 1.7, (g1 - g0) + 8.0, 3.4))
+	else:
+		_keep_clear.append(Rect2(m - 1.7, g0 - 4.0, 3.4, (g1 - g0) + 8.0))
 
 
 ## Long ramp along one face of a block, from the street up to a landing level
@@ -509,24 +568,26 @@ func _side_ramp(rec: Dictionary, side: String) -> void:
 		var zin: float = rec.z0 + 0.2 if side == "n" else rec.z1 - 0.2
 		var hi := _height_at(rec, x1 - 0.2 if up > 0 else x0 + 0.2, zin)
 		var z0: float = rec.z0 - w if side == "n" else rec.z1
+		var lx := x1 - landing if up > 0 else x0
 		if up > 0:
 			ramps.append(Ramp.new(x0, x1 - landing, z0, z0 + w, 0, hi, "x", up))
-			add_box(x1 - landing, 0, z0, x1, hi, z0 + w, "red")
 		else:
 			ramps.append(Ramp.new(x0 + landing, x1, z0, z0 + w, 0, hi, "x", up))
-			add_box(x0, 0, z0, x0 + landing, hi, z0 + w, "red")
+		add_box(lx, 0, z0, lx + landing, hi, z0 + w, "red")
+		_keep_clear.append(Rect2(lx - 1.0, rec.z0 - 0.1 if side == "n" else rec.z1 - 4.0, landing + 2.0, 4.1))
 	else:
 		var z0: float = rec.z0 + m
 		var z1: float = rec.z1 - m
 		var xin: float = rec.x0 + 0.2 if side == "w" else rec.x1 - 0.2
 		var hi := _height_at(rec, xin, z1 - 0.2 if up > 0 else z0 + 0.2)
 		var x0: float = rec.x0 - w if side == "w" else rec.x1
+		var lz := z1 - landing if up > 0 else z0
 		if up > 0:
 			ramps.append(Ramp.new(x0, x0 + w, z0, z1 - landing, 0, hi, "z", up))
-			add_box(x0, 0, z1 - landing, x0 + w, hi, z1, "red")
 		else:
 			ramps.append(Ramp.new(x0, x0 + w, z0 + landing, z1, 0, hi, "z", up))
-			add_box(x0, 0, z0, x0 + w, hi, z0 + landing, "red")
+		add_box(x0, 0, lz, x0 + w, hi, lz + landing, "red")
+		_keep_clear.append(Rect2(rec.x0 - 0.1 if side == "w" else rec.x1 - 4.0, lz - 1.0, 4.1, landing + 2.0))
 
 
 ## Footprint (x0, z0, x1, z1) of something set against face `side`, `depth` out
@@ -587,7 +648,7 @@ func _link(a: Dictionary, c: Dictionary, along_x: bool) -> void:
 	var m := o0 + 2.5 + _rnd() * (o1 - o0 - 5.0)
 	var ha := _height_at(a, a.x1 - 0.1, m) if along_x else _height_at(a, m, a.z1 - 0.1)
 	var hc := _height_at(c, c.x0 + 0.1, m) if along_x else _height_at(c, m, c.z0 + 0.1)
-	if absf(ha - hc) >= 0.9 and _rnd() < 0.7:
+	if absf(ha - hc) >= 0.9 and _rnd() < 0.35:
 		# bridge sloping down to the lower roof, flush with both edges
 		var up := 1 if hc > ha else -1
 		var lo := minf(ha, hc)
@@ -596,12 +657,7 @@ func _link(a: Dictionary, c: Dictionary, along_x: bool) -> void:
 			ramps.append(Ramp.new(g0, g1, m - 1.2, m + 1.2, lo, hi, "x", up, 0.3))
 		else:
 			ramps.append(Ramp.new(m - 1.2, m + 1.2, g0, g1, lo, hi, "z", up, 0.3))
-		used = m
-	elif absf(ha - hc) < 0.3 and _rnd() < 0.6:
-		if along_x:
-			add_box(g0, ha - 0.3, m - 1.1, g1, ha, m + 1.1, "red")
-		else:
-			add_box(m - 1.1, ha - 0.3, g0, m + 1.1, ha, g1, "red")
+		_clear_lane(along_x, g0, g1, m)
 		used = m
 	if _rnd() < 0.45:   # billboard over the street: run along it to cross
 		var b := o0 + 0.8 if _rnd() < 0.5 else o1 - 0.8
