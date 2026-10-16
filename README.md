@@ -39,9 +39,9 @@ Ou avec un export Linux du jeu : `./ChatPerche.x86_64 --headless -- --server`. L
 | Touche | Action |
 |---|---|
 | ZQSD / WASD | Courir (touches physiques, marche en AZERTY et QWERTY) |
-| Espace | Sauter. Face à un mur : grimper. Contre un mur sur le côté, en l'air : saut mural. Chaque saut coûte 12 % d'endurance (~8 sauts avec une barre pleine) |
-| Maj | Sprinter, uniquement au sol (10,5 m/s, 11 pour le chasseur). Vide la barre d'endurance en ~4,5 s ; elle se recharge en 4 s après une courte pause. Vide, le sprint et les boosts de glissade sont bloqués jusqu'à 30 % |
-| Ctrl | Glisser en courant (boost). Juste avant d'atterrir d'une chute : roulade |
+| Espace | Sauter. Face à un mur : grimper. Contre un mur sur le côté, en l'air : saut mural |
+| Maj | Sprinter, uniquement au sol (10,5 m/s, 11 pour le chasseur). Vide la barre d'endurance en ~4,5 s ; elle se recharge en 4 s après une courte pause. Vide, le sprint est bloqué jusqu'à 30 % |
+| Ctrl | Glisser en courant (garde ta vitesse). Juste avant d'atterrir d'une chute : roulade |
 | Avancer + sauter le long d'un mur | Course murale. Espace pour rebondir avec un boost |
 | Avancer vers un rebord en l'air | S'accrocher et se hisser (avec un boost). Sans avancer : rester accroché, Ctrl pour lâcher |
 | Clic gauche / F | Chasseur : toucher le chassé dans le viseur (3 m) |

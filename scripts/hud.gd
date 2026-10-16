@@ -451,8 +451,8 @@ func _build_menu() -> void:
 	keys.add_theme_constant_override("v_separation", 6)
 	for pair in [
 		["ZQSD / WASD", "Courir"],
-		["Espace", "Sauter (consomme de l'endurance). Face à un mur : grimper. Contre un mur sur le côté, en l'air : saut mural."],
-		["Maj", "Sprinter (au sol). Consomme l'endurance, qui se recharge quand tu ne sprintes ni ne sautes. Vide : plus de sprint ni de boost de glissade."],
+		["Espace", "Sauter. Face à un mur : grimper. Contre un mur sur le côté, en l'air : saut mural."],
+		["Maj", "Sprinter (au sol). Consomme l'endurance, qui se recharge quand tu ne sprintes pas."],
 		["Ctrl", "Glisser en courant. Juste avant d'atterrir d'une chute : roulade."],
 		["Course murale", "Sauter le long d'un mur en avançant, puis Espace pour rebondir."],
 		["Rebords", "Avancer vers un rebord en l'air pour s'y accrocher et se hisser."],
