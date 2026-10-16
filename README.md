@@ -50,6 +50,8 @@ Ou avec un export Linux du jeu : `./ChatPerche.x86_64 --headless -- --server`. L
 
 ## Commandes
 
+Touches par défaut, modifiables dans le menu (bouton **Touches**, aussi accessible depuis la pause). Les choix sont enregistrés avec les autres réglages.
+
 | Touche | Action |
 |---|---|
 | ZQSD / WASD | Courir (touches physiques, marche en AZERTY et QWERTY) |
@@ -63,16 +65,18 @@ Ou avec un export Linux du jeu : `./ChatPerche.x86_64 --headless -- --server`. L
 | Entrée | Lancer la manche |
 | Tab | Scores |
 | Échap | Menu |
+| F11 | Plein écran (aussi dans le menu) |
 
 ## Règles
 
 - **Dispersion (10 s)** : le chasseur est bloqué et aveuglé, les chassés s'enfuient.
 - **Chasse (2 min 30)** : le chasseur touche les chassés. Un chassé touché passe en vol libre jusqu'à la manche suivante.
+- **Balises** : pendant la chasse, une balise apparaît régulièrement à un endroit au hasard (sur un toit ou à un carrefour), signalée par une colonne de lumière. Les chassés ont 25 s pour l'atteindre (+50). Ceux qui la ratent sont repérés : le chasseur les voit à travers les murs pendant 6 s. Le chasseur voit aussi la balise.
 - **Fin** : le chasseur gagne s'il touche tout le monde, sinon les chassés gagnent.
 - **Points** : +100 par chassé touché, +150 si le chasseur gagne. Chaque seconde de survie rapporte 2 points, et chaque chassé encore libre à la fin gagne +100.
 - Le chasseur change à chaque manche : c'est celui qui l'a été le moins souvent.
 
-Les durées sont dans `scripts/net.gd` (`HIDE_T`, `ROUND_T`, `END_T`). Les vitesses et la physique du parkour sont dans les constantes en haut de `scripts/player.gd`.
+Les durées sont dans `scripts/net.gd` (`HIDE_T`, `ROUND_T`, `END_T`, et `BEACON_*` / `REVEAL_T` pour les balises). Les vitesses et la physique du parkour sont dans les constantes en haut de `scripts/player.gd`.
 
 ## Structure
 
@@ -97,6 +101,9 @@ Chaque client simule son propre coureur et envoie son état environ 30 fois par 
 ```bash
 # Scénarios de parkour (escalade, glissade, course murale, roulade, hissage, rampe)
 godot --headless --fixed-fps 120 --path . -s res://tests/parkour_test.gd
+
+# Règles des balises côté serveur (sans réseau)
+godot --headless -s res://tests/beacon_test.gd
 
 # Manche complète en réseau : un serveur dédié et deux bots
 godot --headless --path . res://scenes/main.tscn -- --server &

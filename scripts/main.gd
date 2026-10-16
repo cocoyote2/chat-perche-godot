@@ -26,6 +26,10 @@ var hud_acc := 0.0
 var last_phase := ""
 var last_count := -1
 var heart_t := 0.0
+var beacon: Beacon
+var last_beacon_p = null   # Vector3 of the beacon already announced, or null
+var beacon_done := false
+var reveal_seen := false
 var board_held := false
 var settings := ConfigFile.new()
 
@@ -40,6 +44,9 @@ func _ready() -> void:
 	world.generate()
 	world.build_collision()
 	world.build_visuals()
+	Net.beacon_spots = world.beacon_spots
+	beacon = Beacon.new()
+	world.add_child(beacon)
 	_setup_environment()
 
 	sfx = Sfx.new()
@@ -60,16 +67,19 @@ func _ready() -> void:
 	hud.resume_pressed.connect(_resume)
 	hud.leave_pressed.connect(_on_leave)
 	hud.start_pressed.connect(func(): Net.request_start())
+	hud.fullscreen_toggled.connect(_set_fullscreen)
+	hud.key_chosen.connect(_on_key_chosen)
+	hud.keys_reset.connect(_on_keys_reset)
 
 	Net.joined.connect(_on_joined)
 	Net.session_ended.connect(_on_session_ended)
 	Net.caught_event.connect(_on_caught_event)
 
-	settings.load("user://settings.cfg")
 	hud.name_edit.text = str(settings.get_value("player", "name", ""))
 	hud._pick_color(int(settings.get_value("player", "color", randi() % COLORS.size())))
 	hud.sens_slider.value = float(settings.get_value("player", "sensitivity", 1.0))
 	hud.ip_edit.text = str(settings.get_value("player", "last_ip", "127.0.0.1"))
+	_set_fullscreen(bool(settings.get_value("display", "fullscreen", false)))
 	hud.show_main_menu()
 
 	# view behind the menu
@@ -80,6 +90,11 @@ func _ready() -> void:
 
 func _run_dedicated() -> void:
 	Engine.max_fps = 60
+	# the server places the beacons, so it needs the city layout (no visuals)
+	var w := World.new()
+	w.generate()
+	Net.beacon_spots = w.beacon_spots
+	w.free()
 	var err := Net.start_host(true)
 	if err != OK:
 		printerr("Impossible d'ouvrir le port %d (erreur %d)" % [Net.PORT, err])
@@ -89,24 +104,11 @@ func _run_dedicated() -> void:
 	Net.roster_changed.connect(func(): print("Joueurs : ", Net.players.values().map(func(p): return p.name)))
 
 
+## Bindings by physical key position (ZQSD on AZERTY, WASD on QWERTY), with the
+## player's own choices saved in settings.cfg on top of the defaults.
 func _setup_input() -> void:
-	var keys := {
-		"move_forward": [KEY_W, KEY_UP], "move_back": [KEY_S, KEY_DOWN],
-		"move_left": [KEY_A, KEY_LEFT], "move_right": [KEY_D, KEY_RIGHT],
-		"jump": [KEY_SPACE], "slide": [KEY_CTRL], "sprint": [KEY_SHIFT], "tag": [KEY_F], "pulse": [KEY_E],
-		"scores": [KEY_TAB], "start_round": [KEY_ENTER, KEY_KP_ENTER], "pause": [KEY_ESCAPE],
-	}
-	for action in keys:
-		if InputMap.has_action(action):
-			InputMap.erase_action(action)
-		InputMap.add_action(action)
-		for k in keys[action]:
-			var ev := InputEventKey.new()
-			ev.physical_keycode = k   # physical position: ZQSD on AZERTY, WASD on QWERTY
-			InputMap.action_add_event(action, ev)
-	var mb := InputEventMouseButton.new()
-	mb.button_index = MOUSE_BUTTON_LEFT
-	InputMap.action_add_event("tag", mb)
+	settings.load("user://settings.cfg")
+	Keys.load_from(settings)
 
 
 func _setup_environment() -> void:
@@ -219,6 +221,32 @@ func _exit_game() -> void:
 		avatars[id].queue_free()
 	avatars.clear()
 	sfx.play("slide_off")
+	beacon.visible = false
+	hud.set_beacon("", Hud.INK)
+	hud.set_beacon_marker(false)
+	last_beacon_p = null
+
+
+func _set_fullscreen(on: bool) -> void:
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN if on else DisplayServer.WINDOW_MODE_WINDOWED)
+	hud.fullscreen_check.set_pressed_no_signal(on)
+	if bool(settings.get_value("display", "fullscreen", false)) != on:
+		settings.set_value("display", "fullscreen", on)
+		settings.save("user://settings.cfg")
+
+
+func _on_key_chosen(action: String, e: InputEvent) -> void:
+	if Keys.rebind(action, e):
+		Keys.save_to(settings)
+		settings.save("user://settings.cfg")
+	hud.refresh_keys()
+
+
+func _on_keys_reset() -> void:
+	Keys.reset()
+	Keys.save_to(settings)
+	settings.save("user://settings.cfg")
+	hud.refresh_keys()
 
 
 func _resume() -> void:
@@ -237,7 +265,12 @@ func _pause() -> void:
 
 
 func _unhandled_input(e: InputEvent) -> void:
-	if not playing or player == null:
+	if player == null:
+		return
+	if e.is_action_pressed("fullscreen"):   # works in the menus too
+		_set_fullscreen(DisplayServer.window_get_mode() != DisplayServer.WINDOW_MODE_FULLSCREEN)
+		return
+	if not playing:
 		return
 	if e.is_action_pressed("pause"):
 		if paused:
@@ -425,9 +458,12 @@ func _process(delta: float) -> void:
 		var p: Dictionary = Net.players[id]
 		av.style(COLORS[clampi(int(p.color), 0, COLORS.size() - 1)], is_hunter, str(p.name))
 		av.show_sample(s, delta, now / 1000.0)
-		av.set_xray(pulse_t > 0.0 and role == "hunter" and not is_hunter)
+		# the sonar, or a beacon the runner missed, shows them through walls
+		av.set_xray(role == "hunter" and not is_hunter and (pulse_t > 0.0 or (g.rv as Array).has(id)))
 		if is_hunter:
 			hunter_dist = av.position.distance_to(player.position)
+
+	_update_beacon(g, role)
 
 	# ---- feedback
 	var danger := clampf((24.0 - hunter_dist) / 20.0, 0.0, 1.0) if role == "runner" and g.ph == "run" else 0.0
@@ -460,6 +496,84 @@ func _process(delta: float) -> void:
 		]))
 
 
+## Beacon in the world, its HUD line and marker, and the messages when one
+## appears, is reached, or closes on runners who missed it.
+func _update_beacon(g: Dictionary, role: String) -> void:
+	var me := Net.me()
+	var b: Dictionary = g.b
+	var active: bool = not b.is_empty() and g.ph == "run" and role != "free"
+	if not active:
+		last_beacon_p = null
+	else:
+		var bp: Vector3 = b.p
+		if last_beacon_p == null or (last_beacon_p as Vector3) != bp:
+			last_beacon_p = bp
+			beacon_done = false
+			sfx.play("beacon")
+			if role == "runner":
+				hud.message("Nouvelle balise : rejoins-la en %d s" % ceili(float(b.t)))
+			elif role == "hunter":
+				hud.message("Nouvelle balise : les chassés doivent s'y rendre")
+	var done: bool = active and (b.ok as Array).has(me)
+	if done and not beacon_done:
+		beacon_done = true
+		sfx.play("beacon_ok")
+		hud.flash_move("Balise +%d" % roundi(Net.BEACON_PTS))
+
+	var rv: Array = g.rv
+	var reveal_on: bool = g.ph == "run" and not rv.is_empty() and float(g.rvt) > 0.0
+	if reveal_on and not reveal_seen:
+		reveal_seen = true
+		if rv.has(me) and role == "runner":
+			sfx.play("reveal")
+			hud.message("Balise ratée : le chasseur te voit à travers les murs")
+			hud.flash_screen(0.25)
+		elif role == "hunter":
+			sfx.play("reveal")
+			hud.message("%d chassé%s repéré%s" % [rv.size(), "s" if rv.size() > 1 else "", "s" if rv.size() > 1 else ""])
+	elif not reveal_on:
+		reveal_seen = false
+
+	if active:
+		var bp: Vector3 = b.p
+		beacon.show_at(bp, done)
+		var col := Beacon.DONE if done else Beacon.TODO
+		var secs := ceili(float(b.t))
+		var dist := roundi(player.position.distance_to(bp))
+		if role == "runner":
+			hud.set_beacon("Balise validée" if done else "Balise · %d s · %d m" % [secs, dist], col)
+		else:
+			hud.set_beacon("Balise · %d s" % secs, col)
+		if done:
+			hud.set_beacon_marker(false)
+		else:
+			hud.set_beacon_marker(true, _screen_point(bp + Vector3(0, 1.5, 0)), "%d m" % dist, col)
+		return
+	beacon.visible = false
+	hud.set_beacon_marker(false)
+	if reveal_on and rv.has(me) and role == "runner":
+		hud.set_beacon("Repéré · %d s" % ceili(float(g.rvt)), Hud.RED)
+	elif reveal_on and role == "hunter":
+		hud.set_beacon("%d repéré%s · %d s" % [rv.size(), "s" if rv.size() > 1 else "", ceili(float(g.rvt))], Hud.RED)
+	else:
+		hud.set_beacon("", Hud.INK)
+
+
+## Where a world point lands on screen, pinned to the screen edge when it is
+## off to the side or behind the camera.
+func _screen_point(p: Vector3) -> Vector2:
+	var cam := player.camera
+	var vp := get_viewport().get_visible_rect().size
+	var margin := Vector2(60, 70)
+	var sp: Vector2
+	if cam.is_position_behind(p):
+		var local := cam.global_transform.affine_inverse() * p
+		sp = Vector2(margin.x if local.x < 0.0 else vp.x - margin.x, vp.y * 0.5)
+	else:
+		sp = cam.unproject_position(p)
+	return sp.clamp(margin, vp - margin)
+
+
 static func _fmt_time(t: float) -> String:
 	var s := maxi(0, ceili(t))
 	return "%d:%02d" % [s / 60, s % 60]
@@ -486,7 +600,8 @@ func _update_hud(g: Dictionary, role: String) -> void:
 			hud.set_top(_fmt_time(g.t), "Fin de manche")
 
 	var role_text := {"free": "Échauffement" if g.ph == "lobby" else "Libre", "runner": "Chassé", "hunter": "Chasseur", "caught": "Attrapé", "spectator": "Spectateur"}
-	var role_hint := {"runner": "Ne te fais pas toucher", "hunter": "Touche-les tous", "caught": "Vol libre : ZQSD, Espace, Ctrl", "spectator": "Vol libre : ZQSD, Espace, Ctrl"}
+	var fly := "Vol libre : %s, %s, %s" % [Keys.move_names(), Keys.name_of("jump"), Keys.name_of("slide")]
+	var role_hint := {"runner": "Ne te fais pas toucher", "hunter": "Touche-les tous", "caught": fly, "spectator": fly}
 	var kind := "hunter" if role == "hunter" else ("spec" if role == "caught" or role == "spectator" else "normal")
 	hud.set_role(role_text[role], kind, role_hint.get(role, ""))
 
@@ -510,9 +625,9 @@ func _update_hud(g: Dictionary, role: String) -> void:
 		if n < 2:
 			hint = "Entraîne-toi au parkour." if Net.mode == "solo" else "En attente d'autres joueurs (2 minimum)."
 		else:
-			hint = "[Entrée] pour lancer la manche"
+			hint = "[%s] pour lancer la manche" % Keys.name_of("start_round")
 	elif role == "hunter" and g.ph == "run":
-		hint = "[Clic] ou [F] pour toucher · [E] sonar"
+		hint = "[%s] pour toucher · [%s] sonar" % [Keys.name_of("tag"), Keys.name_of("pulse")]
 	hud.set_hint(hint)
 	hud.set_pulse(role == "hunter" and g.ph == "run", "ACTIF" if pulse_t > 0.0 else ("%d s" % ceili(pulse_cd) if pulse_cd > 0.0 else "PRÊT"))
 

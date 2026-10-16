@@ -13,7 +13,8 @@ const JITTER := {"step": 0.07, "jump": 0.05, "land": 0.05, "grab": 0.06, "whoosh
 const SLIDE_LEVEL := 0.4
 # peak level of each finished sound, so they sit together in the mix
 const PEAK := {"step": 0.5, "jump": 0.5, "land": 0.85, "grab": 0.6, "whoosh": 0.55, "miss": 0.6,
-	"tag": 0.75, "caught": 0.6, "beep": 0.45, "beep_hi": 0.55, "heart": 0.85, "sonar": 0.6, "slide": 0.6}
+	"tag": 0.75, "caught": 0.6, "beep": 0.45, "beep_hi": 0.55, "heart": 0.85, "sonar": 0.6, "slide": 0.6,
+	"beacon": 0.55, "beacon_ok": 0.55, "reveal": 0.6}
 
 var _streams := {}   # name -> Array of AudioStreamWAV variants
 var _pool: Array[AudioStreamPlayer] = []
@@ -29,7 +30,7 @@ func _ready() -> void:
 		for v in VARIANTS[k]:
 			list.append(_wav(_make(k)))
 		_streams[k] = list
-	for k in ["tag", "caught", "beep", "beep_hi", "heart", "sonar"]:
+	for k in ["tag", "caught", "beep", "beep_hi", "heart", "sonar", "beacon", "beacon_ok", "reveal"]:
 		_streams[k] = [_wav(_make(k))]
 	for i in 12:
 		var p := AudioStreamPlayer.new()
@@ -201,6 +202,29 @@ func _make_sonar() -> PackedFloat32Array:
 	_add(o, ping, 0, 1.0)
 	_add(o, ping, 0.26, 0.32)   # echoes off the city
 	_add(o, ping, 0.52, 0.12)
+	return o
+
+
+func _make_beacon() -> PackedFloat32Array:
+	var o := _buf(0.9)
+	_add(o, _bell(0.6, 880.0, 0.22), 0, 0.4)       # A5...
+	_add(o, _bell(0.75, 1318.5, 0.3), 0.14, 0.45)  # ...E6, a rising call
+	return o
+
+
+func _make_beacon_ok() -> PackedFloat32Array:
+	var o := _buf(0.7)
+	var notes := [1046.5, 1318.5, 1568.0, 2093.0]   # C6 E6 G6 C7
+	for i in notes.size():
+		_add(o, _tone(0.4, notes[i], notes[i], 0.003, 0.09 + 0.05 * i), 0.055 * i, 0.32)
+	return o
+
+
+func _make_reveal() -> PackedFloat32Array:
+	var o := _buf(0.8)
+	for i in 2:   # two low warning pulses
+		_add(o, _warm(0.3, 233.1, 207.7, 0.12), 0.2 * i, 0.5)
+	_add(o, _noise(0.5, 900.0, 400.0, 2.0, "band", 0.01, 0.15), 0, 0.12)
 	return o
 
 

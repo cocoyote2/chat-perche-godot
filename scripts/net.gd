@@ -6,6 +6,9 @@ extends Node
 ## times a second (relayed by the server). The server alone runs the round logic:
 ## phases, who hunts, who is caught, scores. It validates tags against the last
 ## positions it received and pushes the game state to everyone.
+##
+## Beacons: during the chase the server keeps sending runners to a random spot.
+## Reaching it in time scores; missing it reveals the runner to the hunter.
 
 signal roster_changed
 signal joined
@@ -17,6 +20,13 @@ const MAX_CLIENTS := 15
 const HIDE_T := 10.0
 const ROUND_T := 150.0
 const END_T := 9.0
+const BEACON_FIRST := 15.0   # into the chase before the first beacon
+const BEACON_T := 25.0       # time runners get to reach it
+const BEACON_GAP := 10.0     # pause between two beacons
+const BEACON_R := 3.0        # horizontal reach, in metres
+const BEACON_MIN_MOVE := 25.0  # a new beacon is at least this far from the last
+const BEACON_PTS := 50.0
+const REVEAL_T := 6.0        # runners who missed it show through walls this long
 
 var mode := "none"          # none, solo, host, client
 var dedicated := false
@@ -26,13 +36,18 @@ var players := {}           # peer id -> {"name": String, "color": int}
 var states := {}            # peer id -> Array of {"t": msec, "d": PackedFloat32Array}
 var g := new_g()
 var local_pos := Vector3.ZERO
+var beacon_spots: Array[Vector3] = []   # filled from the World, also on a dedicated server
+var _last_beacon := Vector3(1e6, 0, 0)
 var _g_acc := 0.0
 var _g_seq := 0
 var _ending := false
 
 
 static func new_g() -> Dictionary:
-	return {"ph": "lobby", "r": 0, "h": 0, "t": 0.0, "pl": [], "c": [], "sc": {}, "hc": {}, "w": "", "seq": 0}
+	# b: current beacon {p, t, ok} or {}; bn: time to the next one;
+	# rv: runners revealed for missing it, rvt: how long they stay revealed
+	return {"ph": "lobby", "r": 0, "h": 0, "t": 0.0, "pl": [], "c": [], "sc": {}, "hc": {}, "w": "",
+		"b": {}, "bn": 0.0, "rv": [], "rvt": 0.0, "seq": 0}
 
 
 func _ready() -> void:
@@ -281,7 +296,7 @@ func gstate_r(ng: Dictionary) -> void:
 func _apply_g(ng: Dictionary) -> void:
 	if int(ng.get("seq", 0)) < int(g.get("seq", 0)):
 		return
-	for k in ["ph", "r", "h", "t", "pl", "c", "sc", "hc", "w"]:
+	for k in ["ph", "r", "h", "t", "pl", "c", "sc", "hc", "w", "b", "rv", "rvt"]:
 		if not ng.has(k):
 			return
 	g = ng
@@ -307,6 +322,7 @@ func _host_tick(dt: float) -> void:
 					alive.append(u)
 			for u in alive:
 				g.sc[u] = float(g.sc.get(u, 0.0)) + dt * 2.0
+			_beacon_tick(dt, alive)
 			if not present.has(g.h):
 				_end_round("abort", alive)
 			elif alive.is_empty():
@@ -341,15 +357,78 @@ func _new_round() -> void:
 	g.hc[best] = int(g.hc.get(best, 0)) + 1
 	g.ph = "hide"
 	g.t = HIDE_T
+	_clear_beacons()
+	g.bn = BEACON_FIRST
 
 
 func _end_round(winner: String, alive: Array) -> void:
 	g.ph = "end"
 	g.t = END_T
 	g.w = winner
+	_clear_beacons()
 	if winner == "hunter":
 		g.sc[g.h] = float(g.sc.get(g.h, 0.0)) + 150.0
 	elif winner == "runners":
 		for u in alive:
 			g.sc[u] = float(g.sc.get(u, 0.0)) + 100.0
 	_push_g(true)
+
+
+# ------------------------------------------------------------------ beacons
+
+func _clear_beacons() -> void:
+	g.b = {}
+	g.rv = []
+	g.rvt = 0.0
+	_last_beacon = Vector3(1e6, 0, 0)
+
+
+func _beacon_tick(dt: float, alive: Array) -> void:
+	if float(g.rvt) > 0.0:
+		g.rvt = float(g.rvt) - dt
+		if g.rvt <= 0.0:
+			g.rv = []
+			g.rvt = 0.0
+	if g.b.is_empty():
+		g.bn = float(g.bn) - dt
+		# no beacon that could not close before the round ends
+		if g.bn <= 0.0 and float(g.t) > BEACON_T + 3.0 and not beacon_spots.is_empty():
+			_new_beacon()
+			_push_g(true)
+		return
+	var b: Dictionary = g.b
+	b.t = float(b.t) - dt
+	var p: Vector3 = b.p
+	var changed := false
+	for u in alive:
+		if (b.ok as Array).has(u):
+			continue
+		var up = pos_of(u)
+		if up == null:
+			continue
+		var d: Vector3 = (up as Vector3) - p
+		if Vector2(d.x, d.z).length() <= BEACON_R and absf(d.y) < 2.5:
+			(b.ok as Array).append(u)
+			g.sc[u] = float(g.sc.get(u, 0.0)) + BEACON_PTS
+			changed = true
+	if b.t <= 0.0:
+		var missed := []
+		for u in alive:
+			if not (b.ok as Array).has(u):
+				missed.append(u)
+		g.rv = missed
+		g.rvt = REVEAL_T if not missed.is_empty() else 0.0
+		g.b = {}
+		g.bn = BEACON_GAP
+		changed = true
+	if changed:
+		_push_g(true)
+
+
+func _new_beacon() -> void:
+	var far := beacon_spots.filter(func(s: Vector3) -> bool: return s.distance_to(_last_beacon) >= BEACON_MIN_MOVE)
+	if far.is_empty():
+		far = beacon_spots
+	var p: Vector3 = far[randi() % far.size()]
+	_last_beacon = p
+	g.b = {"p": p, "t": BEACON_T, "ok": []}

@@ -83,6 +83,7 @@ var ramps: Array[Ramp] = []
 var decor: Array = []          # render-only skyline boxes
 var buildings: Array = []      # one Dictionary per city block (null for the plaza)
 var spawns_runner: Array[Vector3] = []
+var beacon_spots: Array[Vector3] = []   # where the server may place a beacon
 var hunter_spawn := Vector3(0, 2.2, 0)
 
 var _grid := {}
@@ -458,6 +459,29 @@ func generate() -> void:
 					break
 	var ht0 := support_top(0, 80, 0, 100)
 	hunter_spawn = Vector3(0, 2.2 if is_nan(ht0) else ht0, 0)
+	_find_beacon_spots()
+
+
+## Beacon candidates: the middle of every roof (or a clear spot near it) and the
+## street crossings, so runners are sent both up high and down low.
+func _find_beacon_spots() -> void:
+	var tries: Array[Vector2] = [Vector2(0, 0), Vector2(2.5, 2.5), Vector2(-2.5, -2.5), Vector2(2.5, -2.5), Vector2(-2.5, 2.5)]
+	for rec in buildings:
+		if rec == null:
+			continue
+		for p in rec.parts:
+			var x: float = (p[0] + p[1]) / 2.0
+			var z: float = (p[2] + p[3]) / 2.0
+			for o in tries:
+				var top := support_top(x + o.x, 80.0, z + o.y, 100.0)
+				if not is_nan(top) and top > 1.0 and is_free(x + o.x, top, z + o.y, HS):
+					beacon_spots.append(Vector3(x + o.x, top, z + o.y))
+					break
+	for sx in [-30.0, -10.0, 10.0, 30.0]:
+		for sz in [-30.0, -10.0, 10.0, 30.0]:
+			var top := support_top(sx, 2.0, sz, 3.0)
+			if not is_nan(top) and is_free(sx, top, sz, HS):
+				beacon_spots.append(Vector3(sx, top, sz))
 
 
 func _outer_ramp(rec: Dictionary, side: String) -> void:

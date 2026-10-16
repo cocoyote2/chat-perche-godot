@@ -8,6 +8,9 @@ signal join_pressed(address: String)
 signal resume_pressed
 signal leave_pressed
 signal start_pressed
+signal fullscreen_toggled(on: bool)
+signal key_chosen(action: String, event: InputEvent)
+signal keys_reset
 
 const RED := Color("#e5382d")
 const INK := Color("#f3f5f7")
@@ -69,6 +72,8 @@ var center_big: Label
 var center_sub: Label
 var hint_l: Label
 var pulse_l: Label
+var beacon_l: Label
+var beacon_mark: Label
 var cross: Crosshair
 var vig_speed: ColorRect
 var vig_danger: ColorRect
@@ -84,6 +89,12 @@ var menu: Control
 var name_edit: LineEdit
 var ip_edit: LineEdit
 var sens_slider: HSlider
+var fullscreen_check: CheckButton
+var keys_panel: PanelContainer
+var menu_panel: PanelContainer
+var key_buttons := {}      # action -> Button
+var help_grid: GridContainer
+var _capture := ""         # action waiting for a key press, or ""
 var color_buttons: Array[Button] = []
 var status_l: Label
 var start_btns: HBoxContainer
@@ -213,6 +224,20 @@ func _build_game() -> void:
 	top.add_child(timer_l)
 	top.add_child(phase_l)
 	game_root.add_child(top)
+
+	beacon_l = _label("", 18, f_display)
+	beacon_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	beacon_l.uppercase = true
+	beacon_l.add_theme_stylebox_override("normal", _flat(Color(0.04, 0.05, 0.06, 0.55), 8))
+	_place(beacon_l, 0.5, 0, 0.5, 0, -200, 104, 200, 134)
+	beacon_l.visible = false
+	game_root.add_child(beacon_l)
+
+	beacon_mark = _label("", 16, f_display)
+	beacon_mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	beacon_mark.size = Vector2(120, 44)
+	beacon_mark.visible = false
+	game_root.add_child(beacon_mark)
 
 	var role := _box(false, 10)
 	_place(role, 0, 0, 0, 0, 16, 16, 600, 50)
@@ -349,6 +374,7 @@ func _build_menu() -> void:
 	panel.add_theme_stylebox_override("panel", _flat(PANEL, 36))
 	_place(panel, 0, 0, 0, 1, 0, 0, 540, 0)
 	menu.add_child(panel)
+	menu_panel = panel
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	panel.add_child(scroll)
@@ -406,6 +432,19 @@ func _build_menu() -> void:
 	sens_slider.value = 1.0
 	v.add_child(sens_slider)
 
+	fullscreen_check = CheckButton.new()
+	fullscreen_check.text = "Plein écran (F11)"
+	fullscreen_check.add_theme_font_override("font", f_body)
+	fullscreen_check.add_theme_font_size_override("font_size", 16)
+	fullscreen_check.toggled.connect(func(on: bool): fullscreen_toggled.emit(on))
+	v.add_child(fullscreen_check)
+
+	var keys_b := _button("Touches", false)
+	keys_b.add_theme_font_size_override("font_size", 18)
+	keys_b.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	keys_b.pressed.connect(func(): _show_keys(not keys_panel.visible))
+	v.add_child(keys_b)
+
 	v.add_child(_field_label("Adresse de l'hôte (pour rejoindre)"))
 	ip_edit = LineEdit.new()
 	ip_edit.text = "127.0.0.1"
@@ -445,32 +484,146 @@ func _build_menu() -> void:
 	status_l.custom_minimum_size.x = 440
 	v.add_child(status_l)
 
-	var keys := GridContainer.new()
-	keys.columns = 2
-	keys.add_theme_constant_override("h_separation", 14)
-	keys.add_theme_constant_override("v_separation", 6)
-	for pair in [
-		["ZQSD / WASD", "Courir"],
-		["Espace", "Sauter. Face à un mur : grimper. Contre un mur sur le côté, en l'air : saut mural."],
-		["Maj", "Sprinter (au sol). Consomme l'endurance, qui se recharge quand tu ne sprintes pas."],
-		["Ctrl", "Glisser en courant. Juste avant d'atterrir d'une chute : roulade."],
-		["Course murale", "Sauter le long d'un mur en avançant, puis Espace pour rebondir."],
-		["Rebords", "En l'air face à un rebord : Espace pour s'agripper et se hisser."],
-		["Clic / F", "Chasseur : toucher un chassé dans le viseur, de près."],
-		["E", "Chasseur : sonar, révèle les chassés à travers les murs."],
-		["Entrée", "Lancer la manche (2 joueurs minimum)."],
-		["Tab · Échap", "Scores · menu"],
-	]:
-		keys.add_child(_label(pair[0], 16, f_display))
-		var d := _label(pair[1], 14, f_body, Color("#cfd6dd"))
-		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		d.custom_minimum_size.x = 300
-		keys.add_child(d)
-	v.add_child(keys)
+	help_grid = GridContainer.new()
+	help_grid.columns = 2
+	help_grid.add_theme_constant_override("h_separation", 14)
+	help_grid.add_theme_constant_override("v_separation", 6)
+	v.add_child(help_grid)
+	_fill_help()
 	var note := _label("Pour jouer en ligne, l'hôte doit ouvrir le port UDP 7777 (ou utilisez un réseau privé virtuel comme Tailscale). Voir le README.", 13, f_body, MUTED)
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.custom_minimum_size.x = 440
 	v.add_child(note)
+	_build_keys_panel()
+
+
+## Controls help, written with the player's current bindings.
+func _fill_help() -> void:
+	for c in help_grid.get_children():
+		c.queue_free()
+	var jump := Keys.name_of("jump")
+	for pair in [
+		[Keys.move_names(), "Courir"],
+		[jump, "Sauter. Face à un mur : grimper. Contre un mur sur le côté, en l'air : saut mural."],
+		[Keys.name_of("sprint"), "Sprinter (au sol). Consomme l'endurance, qui se recharge quand tu ne sprintes pas."],
+		[Keys.name_of("slide"), "Glisser en courant. Juste avant d'atterrir d'une chute : roulade."],
+		["Course murale", "Sauter le long d'un mur en avançant, puis %s pour rebondir." % jump],
+		["Rebords", "En l'air face à un rebord : %s pour s'agripper et se hisser." % jump],
+		[Keys.name_of("tag"), "Chasseur : toucher un chassé dans le viseur, de près."],
+		[Keys.name_of("pulse"), "Chasseur : sonar, révèle les chassés à travers les murs."],
+		["Balises", "Chassé : rejoins chaque balise (colonne de lumière) avant la fin du compte à rebours (+50). Sinon, le chasseur te voit à travers les murs 6 s."],
+		[Keys.name_of("start_round"), "Lancer la manche (2 joueurs minimum)."],
+		["%s · Échap" % Keys.name_of("scores"), "Scores · menu"],
+		[Keys.name_of("fullscreen"), "Plein écran"],
+	]:
+		var k := _label(pair[0], 16, f_display)
+		k.custom_minimum_size.x = 110
+		k.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		help_grid.add_child(k)
+		var d := _label(pair[1], 14, f_body, Color("#cfd6dd"))
+		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		d.custom_minimum_size.x = 300
+		help_grid.add_child(d)
+
+
+## Settings screen next to the menu: one button per action; click it, then
+## press the new key or mouse button.
+func _build_keys_panel() -> void:
+	keys_panel = PanelContainer.new()
+	var style := _flat(Color(0.06, 0.07, 0.09, 0.96), 30)
+	style.border_color = RED
+	style.border_width_left = 3
+	keys_panel.add_theme_stylebox_override("panel", style)
+	_place(keys_panel, 0, 0, 0, 1, 540, 0, 1020, 0)
+	keys_panel.visible = false
+	menu.add_child(keys_panel)
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	keys_panel.add_child(scroll)
+	var v := _box(true, 10)
+	v.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	v.mouse_filter = Control.MOUSE_FILTER_PASS
+	scroll.add_child(v)
+	v.add_child(_label("TOUCHES", 40, f_display))
+	var sub := _label("Clique sur une action, puis appuie sur la touche ou le bouton de souris voulu. Échap annule. Une touche déjà prise est échangée.", 14, f_body, MUTED)
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sub.custom_minimum_size.x = 400
+	v.add_child(sub)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 4)
+	grid.mouse_filter = Control.MOUSE_FILTER_PASS
+	for pair in Keys.ACTIONS:
+		var l := _label(pair[1], 17, f_body)
+		l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		grid.add_child(l)
+		var b := _button("", false)
+		b.add_theme_font_size_override("font_size", 18)
+		b.custom_minimum_size.x = 170
+		for st in ["normal", "hover", "pressed", "focus"]:   # compact rows
+			var sb := b.get_theme_stylebox(st).duplicate() as StyleBoxFlat
+			sb.content_margin_top = 4
+			sb.content_margin_bottom = 4
+			b.add_theme_stylebox_override(st, sb)
+		b.pressed.connect(_start_capture.bind(pair[0]))
+		grid.add_child(b)
+		key_buttons[pair[0]] = b
+	v.add_child(grid)
+	var fixed := _label("Toujours actives : les flèches pour se déplacer, F pour toucher, Échap pour le menu.", 13, f_body, MUTED)
+	fixed.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fixed.custom_minimum_size.x = 400
+	v.add_child(fixed)
+	var row := _box(false, 10)
+	row.mouse_filter = Control.MOUSE_FILTER_PASS
+	var reset_b := _button("Réinitialiser", false)
+	var close_b := _button("Fermer", true)
+	reset_b.pressed.connect(func(): keys_reset.emit())
+	close_b.pressed.connect(func(): _show_keys(false))
+	row.add_child(reset_b)
+	row.add_child(close_b)
+	v.add_child(row)
+	refresh_keys()
+
+
+func _show_keys(on: bool) -> void:
+	_capture = ""
+	keys_panel.visible = on
+	# right against the menu, whose width follows its content
+	keys_panel.offset_left = menu_panel.size.x
+	keys_panel.offset_right = menu_panel.size.x + 480
+	refresh_keys()
+
+
+func _start_capture(action: String) -> void:
+	refresh_keys()
+	_capture = action
+	key_buttons[action].text = "Appuie sur une touche…"
+
+
+## While waiting for a binding, the next key or mouse press goes to it.
+func _input(e: InputEvent) -> void:
+	if _capture == "":
+		return
+	var key := e as InputEventKey
+	var mouse := e as InputEventMouseButton
+	if (key != null and key.pressed and not key.echo) or (mouse != null and mouse.pressed):
+		get_viewport().set_input_as_handled()
+		var action := _capture
+		_capture = ""
+		if key != null and key.physical_keycode == KEY_ESCAPE:
+			refresh_keys()
+			return
+		key_chosen.emit(action, e)
+
+
+## Updates every text that names a key, after a change of bindings.
+func refresh_keys() -> void:
+	for a in key_buttons:
+		key_buttons[a].text = Keys.name_of(a)
+	fullscreen_check.text = "Plein écran (%s)" % Keys.name_of("fullscreen")
+	_fill_help()
 
 
 func _field_label(text: String) -> Label:
@@ -503,6 +656,7 @@ func show_pause(can_start: bool) -> void:
 
 
 func show_game() -> void:
+	_show_keys(false)
 	menu.visible = false
 	game_root.visible = true
 
@@ -606,6 +760,22 @@ func set_hint(text: String) -> void:
 func set_pulse(visible_now: bool, text: String) -> void:
 	pulse_l.visible = visible_now
 	pulse_l.text = "SONAR  " + text
+
+
+func set_beacon(text: String, color: Color) -> void:
+	beacon_l.visible = text != ""
+	beacon_l.text = text
+	beacon_l.add_theme_color_override("font_color", color)
+
+
+## Marker that follows the beacon on screen (pos is in viewport pixels).
+func set_beacon_marker(on: bool, pos := Vector2.ZERO, text := "", color := INK) -> void:
+	beacon_mark.visible = on
+	if not on:
+		return
+	beacon_mark.text = "◆\n" + text
+	beacon_mark.add_theme_color_override("font_color", color)
+	beacon_mark.position = pos - beacon_mark.size / 2.0
 
 
 func set_cross(mode: String) -> void:
