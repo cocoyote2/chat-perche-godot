@@ -43,7 +43,7 @@ Ou avec un export Linux du jeu : `./ChatPerche.x86_64 --headless -- --server`. L
 | Maj | Sprinter, uniquement au sol (10,5 m/s, 11 pour le chasseur). Vide la barre d'endurance en ~4,5 s ; elle se recharge en 4 s après une courte pause. Vide, le sprint est bloqué jusqu'à 30 % |
 | Ctrl | Glisser en courant (garde ta vitesse). Juste avant d'atterrir d'une chute : roulade |
 | Avancer + sauter le long d'un mur | Course murale. Espace pour rebondir avec un boost |
-| Avancer vers un rebord en l'air | S'accrocher et se hisser (avec un boost). Sans avancer : rester accroché, Ctrl pour lâcher |
+| Espace en l'air face à un rebord | S'agripper et se hisser automatiquement (avec un boost). Sans Espace, on ne s'agrippe pas |
 | Clic gauche / F | Chasseur : toucher le chassé dans le viseur (3 m) |
 | E | Chasseur : sonar, révèle les chassés à travers les murs pendant 3 s (recharge 20 s) |
 | Entrée | Lancer la manche |
@@ -65,7 +65,7 @@ Les durées sont dans `scripts/net.gd` (`HIDE_T`, `ROUND_T`, `END_T`). Les vites
 | Fichier | Rôle |
 |---|---|
 | `scripts/main.gd` | Assemble le jeu : monde, joueur, autres joueurs, HUD, sons. Lit l'état de la partie à chaque image |
-| `scripts/player.gd` | Contrôleur de parkour (`CharacterBody3D`), avec un automate d'états : course, glissade, course murale, escalade, accroche, hissage, roulade, chute, spectateur. Gère aussi le sprint et l'endurance |
+| `scripts/player.gd` | Contrôleur de parkour (`CharacterBody3D`), avec un automate d'états : course, glissade, course murale, escalade, hissage, roulade, chute, spectateur. Gère aussi le sprint et l'endurance |
 | `scripts/world.gd` | Génère la ville (même graine pour tous). Fournit les sondes de parkour : mur à côté, rebord devant, place pour se tenir debout |
 | `scripts/net.gd` | Autoload `Net` : session ENet, liste des joueurs, état des coureurs, logique des manches (côté serveur uniquement) |
 | `scripts/avatar.gd` | Affichage d'un autre joueur, interpolé avec ~110 ms de retard |
@@ -81,7 +81,7 @@ Chaque client simule son propre coureur et envoie son état environ 30 fois par 
 ## Tests
 
 ```bash
-# Scénarios de parkour (escalade, glissade, course murale, roulade, accroche, rampe)
+# Scénarios de parkour (escalade, glissade, course murale, roulade, hissage, rampe)
 godot --headless --fixed-fps 120 --path . -s res://tests/parkour_test.gd
 
 # Manche complète en réseau : un serveur dédié et deux bots

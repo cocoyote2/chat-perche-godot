@@ -36,10 +36,15 @@ func _run() -> void:
 	var z := _clear_z(face, part[2] + 1.5, part[3] - 1.5)
 	print("building +X face x=%.2f top=%.2f lane z=%.2f" % [face, top, z])
 
-	# 1. run at the wall, jump: wall climb, then pull up onto the roof with a boost
+	# 1. run at the wall, jump: wall climb, but no grab without a second Space press
 	p.set_pos(Vector3(face + 4.5, 0, z), PI / 2)
 	var log := await _sim([{"ax": Vector2(0, 1), "t": 0.35}, {"ax": Vector2(0, 1), "jump": true, "t": 1.4}])
-	_check("escalade d'un mur de %.1f m" % top, p.position.y >= top - 0.05 and "climb" in log and "mantle" in log, log)
+	_check("grimpe sans Espace : pas de hissage", "climb" in log and not "mantle" in log and p.position.y < top - 0.5, log)
+
+	# 1b. Space again near the top: grab the ledge and pull up onto the roof
+	p.set_pos(Vector3(face + 4.5, 0, z), PI / 2)
+	log = await _sim([{"ax": Vector2(0, 1), "t": 0.35}, {"ax": Vector2(0, 1), "jump": true, "t": 0.2}, {"ax": Vector2(0, 1), "jump": true, "t": 1.0}])
+	_check("Espace au rebord : escalade d'un mur de %.1f m" % top, p.position.y >= top - 0.05 and "mantle" in log, log)
 
 	# 2. slide: starts at the running speed, no boost
 	p.set_pos(Vector3(-52.0, 0, (rec.z0 + -58.0) / 2.0), -PI / 2)   # outer street, facing +X
@@ -65,10 +70,10 @@ func _run() -> void:
 	log = await _sim([{"ax": Vector2(0, 1), "t": 0.6}, {"ax": Vector2(0, 0), "t": 1.4}])
 	_check("mauvaise réception sans roulade", "stun" in log, log)
 
-	# 5. hang on a ledge when falling without pushing forward, then climb up
+	# 5. falling back down past the ledge without pushing forward: Space still grabs it
 	p.set_pos(Vector3(face + 4.5, 0, z), PI / 2)
-	log = await _sim([{"ax": Vector2(0, 1), "t": 0.35}, {"ax": Vector2(0, 1), "jump": true, "t": 0.2}, {"ax": Vector2(0, 0), "t": 1.0}, {"ax": Vector2(0, 1), "t": 0.6}])
-	_check("accroche au rebord puis escalade", "hang" in log and p.position.y >= top - 0.05, log)
+	log = await _sim([{"ax": Vector2(0, 1), "t": 0.35}, {"ax": Vector2(0, 1), "jump": true, "t": 0.2}, {"ax": Vector2(0, 0), "t": 0.85}, {"ax": Vector2(0, 0), "jump": true, "t": 0.6}])
+	_check("en retombant, Espace pour s'agripper et se hisser", "mantle" in log and p.position.y >= top - 0.05, log)
 
 	# 6. slide down a ramp: gravity adds speed
 	var r: World.Ramp = world.ramps[0]

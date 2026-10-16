@@ -3,7 +3,7 @@ class_name Player
 ## First-person parkour controller for the local player.
 ##
 ## States: move (run / air), slide, wall (lateral wall-run), climb (vertical wall
-## run), hang (holding a ledge), mantle (pulling up / vaulting), roll, stun, spec
+## run), mantle (pulling up / vaulting), roll, stun, spec
 ## (free-flying spectator). Godot's move_and_slide() does the collisions; the World
 ## probes answer the parkour questions (wall beside me, ledge in front of me).
 
@@ -56,7 +56,6 @@ var ledge_cd := 0.0
 var slide_jump_t := 9.0    # time since the last slide-jump
 var recent := 0.0          # recent top horizontal speed, survives a wall impact
 var mantle := {}
-var hang := {}
 var combo := 0
 var combo_t := 0.0
 var stun_t := 0.0
@@ -157,7 +156,6 @@ func set_pos(p: Vector3, new_yaw := NAN) -> void:
 	grounded = false
 	set_height(HS)
 	mantle = {}
-	hang = {}
 	last_wall_key = ""
 	climb_used = false
 	stun_t = 0.0
@@ -186,8 +184,6 @@ func state_code() -> int:
 			return 3
 		"climb":
 			return 4
-		"hang":
-			return 5
 		"mantle":
 			return 6
 		"roll":
@@ -250,9 +246,6 @@ func step(dt: float) -> void:
 		return
 	if st == "mantle":
 		_step_mantle(dt, f, fwd)
-		return
-	if st == "hang":
-		_step_hang(f)
 		return
 
 	_update_stamina(dt, has)
@@ -385,14 +378,14 @@ func step(dt: float) -> void:
 				var l := world.find_ledge(position, h, fn, 0.3, 2.4, 0.5)
 				if not l.is_empty():
 					var rel: float = l.top - position.y
-					if rel <= 1.45 and f > 0.0:
+					# low ledges are vaulted on the way, but not at the end of a wall climb
+					if rel <= 1.45 and f > 0.0 and not climb_used:
 						_start_mantle(l, "vault", f)
 						return
-					if f > 0.0:
+					# Space grabs the ledge and pulls straight up; without it, no grab
+					if jump_buf > 0.0:
+						jump_buf = 0.0
 						_start_mantle(l, "climb", f)
-						return
-					if rel > 1.45:
-						_start_hang(l, fn)
 						return
 
 	# ---- walls while airborne
@@ -615,7 +608,6 @@ func _start_mantle(l: Dictionary, kind: String, f: float) -> void:
 	st = "mantle"
 	velocity = Vector3.ZERO
 	set_height(HL)
-	hang = {}
 	_combo("Franchissement" if kind == "vault" else "Escalade")
 	sfx.emit("grab", 1.0)
 
@@ -639,33 +631,6 @@ func _step_mantle(dt: float, f: float, fwd: Vector3) -> void:
 		grounded = true
 		mantle = {}
 		ledge_cd = 0.2
-
-
-func _start_hang(l: Dictionary, fn: Vector2i) -> void:
-	st = "hang"
-	hang = l
-	var face: float = l.face
-	var p := position
-	p.y = float(l.top) - 1.95
-	if fn.x != 0:
-		p.x = face + fn.x * (R + 0.01)
-	if fn.y != 0:
-		p.z = face + fn.y * (R + 0.01)
-	position = p
-	velocity = Vector3.ZERO
-	sfx.emit("grab", 1.0)
-	notice.emit("Accroché : avance pour grimper, Ctrl pour lâcher")
-
-
-func _step_hang(f: float) -> void:
-	velocity = Vector3.ZERO
-	if f > 0.0 or jump_buf > 0.0:
-		jump_buf = 0.0
-		_start_mantle(hang, "climb", 1.0)
-	elif slide_buf < 0.05:
-		hang = {}
-		st = "move"
-		ledge_cd = 0.5
 
 
 func _start_wallrun(n: Vector2i, b: World.Box, hs: float, right: Vector3) -> void:

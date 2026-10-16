@@ -455,7 +455,7 @@ func _build_menu() -> void:
 		["Maj", "Sprinter (au sol). Consomme l'endurance, qui se recharge quand tu ne sprintes pas."],
 		["Ctrl", "Glisser en courant. Juste avant d'atterrir d'une chute : roulade."],
 		["Course murale", "Sauter le long d'un mur en avançant, puis Espace pour rebondir."],
-		["Rebords", "Avancer vers un rebord en l'air pour s'y accrocher et se hisser."],
+		["Rebords", "En l'air face à un rebord : Espace pour s'agripper et se hisser."],
 		["Clic / F", "Chasseur : toucher un chassé dans le viseur, de près."],
 		["E", "Chasseur : sonar, révèle les chassés à travers les murs."],
 		["Entrée", "Lancer la manche (2 joueurs minimum)."],

@@ -181,11 +181,6 @@ func _pose(s: int, speed: float, dt: float, w: float, t: float) -> void:
 		4:
 			al = -2.9 + sw * 0.3
 			ar = -2.9 - sw * 0.3
-		5:
-			al = -3.0
-			ar = -3.0
-			ll = 0.2
-			lr = -0.1
 		6:
 			al = -1.5
 			ar = -1.5
