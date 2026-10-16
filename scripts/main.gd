@@ -219,7 +219,6 @@ func _exit_game() -> void:
 		avatars[id].queue_free()
 	avatars.clear()
 	sfx.play("slide_off")
-	sfx.set_wind(0.0)
 
 
 func _resume() -> void:
@@ -299,7 +298,7 @@ func _try_tag() -> void:
 		tag_cd = 0.3
 	else:
 		tag_cd = 0.45
-		sfx.play("whoosh", 1.0)
+		sfx.play("miss")
 
 
 func _try_pulse() -> void:
@@ -347,7 +346,6 @@ func _process(delta: float) -> void:
 	if player == null:
 		return
 	if not playing:
-		sfx.set_wind(0.0)
 		return
 	var g := Net.g
 	var me := Net.me()
@@ -445,7 +443,6 @@ func _process(delta: float) -> void:
 	var hs := player.hspeed()
 	hud.set_speed(hs, player.run_speed, Player.VMAX, player.combo)
 	hud.set_stamina(player.stamina, player.exhausted, player.sprinting, player.st != "spec")
-	sfx.set_wind(clampf((hs - 4.0) / 12.0, 0.0, 1.0) + (0.3 if player.velocity.y < -8.0 else 0.0))
 
 	hud_acc += delta
 	if hud_acc >= 0.1:
